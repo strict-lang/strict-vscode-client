@@ -16,8 +16,8 @@
   "contributes": {
     "commands": [
       {
-        "command": "strict-vscode-client.helloWorld",
-        "title": "Hello World"
+        "command": "strict-vscode-client.run",
+        "title": "Run strict"
       }
     ]
   },

@@ -1,17 +1,19 @@
 import { connect } from "net";
-import { ExtensionContext } from "vscode";
+import * as vscode from 'vscode';
+import { window as Window } from 'vscode';
+
 
 import {
   LanguageClient,
   StreamInfo,
-  CancellationStrategy,
+  CancellationStrategy
 } from "vscode-languageclient/node";
 
 let client: LanguageClient;
 
-export function activate() {
+export function activate(context: vscode.ExtensionContext) {
   const connectFunc = () => {
-    return new Promise<StreamInfo>((resolve, reject) => {
+    return new Promise<StreamInfo>((resolve) => {
       function tryConnect() {
         const socket = connect(`\\\\.\\pipe\\Strict.LanguageServer`);
         socket.on("connect", () => {
@@ -34,15 +36,38 @@ export function activate() {
         pattern: "**/*.strict",
       },
     ],
-
     progressOnInitialization: true,
     connectionOptions: {
       maxRestartCount: 10,
       cancellationStrategy: CancellationStrategy.Message,
     },
+    middleware: {
+      executeCommand: async (command, args, next) => {
+        const choices: string[] = [];
+        const quickPick = Window.createQuickPick();
+        quickPick.title = 'Enter methodcall :';
+        quickPick.items = choices.map(choice => ({ label: choice }));
+        quickPick.onDidChangeValue(() => {
+          if (!choices.includes(quickPick.value)) { 
+            quickPick.items = [quickPick.value, ...choices].map(label => ({ label })); 
+          }
+        });
+
+        quickPick.onDidAccept(() => {
+          const selection = quickPick.activeItems[0];
+          args = args.slice(0);
+          args.push(selection);
+          args.push(Window.activeTextEditor?.document.uri.fsPath);
+          quickPick.hide();
+          return next(command, args);
+        });
+        quickPick.show();
+      }
+    }
   });
   client.registerProposedFeatures();
   client.start();
+
 }
 
 export function deactivate(): Thenable<void> | undefined {
