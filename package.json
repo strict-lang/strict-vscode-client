@@ -19,7 +19,18 @@
         "command": "strict-vscode-client.run",
         "title": "Run strict"
       }
-    ]
+    ],
+    "languages": [{
+      "id": "strict",
+      "aliases": ["Strict", "strict"],
+      "extensions": [".strict"],
+      "configuration": "./language-configuration.json"
+  }],
+  "grammars": [{
+      "language": "strict",
+      "scopeName": "source.strict",
+      "path": "./syntaxes/strict.tmLanguage"
+  }]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

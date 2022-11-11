@@ -1,5 +1,4 @@
 import { connect } from "net";
-import * as vscode from 'vscode';
 import { window as Window } from 'vscode';
 
 
@@ -11,7 +10,7 @@ import {
 
 let client: LanguageClient;
 
-export function activate(context: vscode.ExtensionContext) {
+export function activate() {
   const connectFunc = () => {
     return new Promise<StreamInfo>((resolve) => {
       function tryConnect() {
