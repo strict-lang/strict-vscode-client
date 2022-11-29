@@ -1,7 +1,7 @@
 on:
   push:
     branches: 
-      - master
+      - main
     paths-ignore: # dont run when changes made to these folders 
       - '.vscode/**'
       
