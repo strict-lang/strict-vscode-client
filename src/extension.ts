@@ -9,7 +9,6 @@ import {
 } from "vscode-languageclient/node";
 
 let client: LanguageClient;
-
 export function activate() {
   const connectFunc = () => {
     return new Promise<StreamInfo>((resolve) => {
