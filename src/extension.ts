@@ -85,6 +85,7 @@ export function activate() {
       else {
         editor.setDecorations(possibleDecoration, []);
         decorationTypes.delete(testMessage.lineNumber);
+        decorationTypes.set(testMessage.lineNumber, decorationType);
         editor.setDecorations(decorationType, [{ range: position }]);
       }
     }
