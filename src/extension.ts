@@ -1,6 +1,6 @@
 import { connect } from "net";
 import path = require("path");
-import { Range, Uri, window as Window, TextEditorDecorationType} from 'vscode';
+import { Range, Uri, window as Window, TextEditorDecorationType } from 'vscode';
 import {
   LanguageClient,
   StreamInfo,
@@ -63,8 +63,8 @@ export function activate() {
       }
     }
   });
-  let green = Uri.parse('https://www.clipartmax.com/png/middle/1-14437_green-smiley-face-clip-art-thumbs-up-emoji-green.png'); //use actual icons
-  let red = Uri.parse('https://www.clipartmax.com/png/small/438-4384778_emoji-anger-red-face.png'); //use actual icons
+  let red = Uri.parse('https://imgur.com/FQM0ACT.png'); //use actual icons
+  let green = Uri.parse('https://imgur.com/1cH046F.png'); //use actual icons
   let decorationTypes = new Map<integer, TextEditorDecorationType>();
   client.onNotification('testRunnerNotification', (testMessage: any) => {
     var image = testMessage.state === 0 ? red : green;
@@ -90,6 +90,30 @@ export function activate() {
       }
     }
   });
+  client.onNotification('valueEvaluationNotification', (variableStateNotificationMessage: any) =>{
+    const editor = Window.activeTextEditor;
+
+    for(let key in variableStateNotificationMessage.lineTextPair){
+      let variableValue = variableStateNotificationMessage.lineTextPair[key];
+    const decorationType = Window.createTextEditorDecorationType({
+      after: {
+          contentText: '  ' + variableValue,
+          color: '#a9a9a9'
+      }
+  });
+    if (editor) {
+      const range = new Range(Number(key), editor.document.lineAt(Number(key)).text.length, Number(key), editor.document.lineAt(Number(key)).text.length);
+  
+      const decoration = {
+        range: range,
+        renderOptions: {}
+      };
+      editor.setDecorations(decorationType, []);
+      editor.setDecorations(decorationType, [decoration]);
+    }
+    }
+  });
+  
   client.registerProposedFeatures();
   client.start();
 
