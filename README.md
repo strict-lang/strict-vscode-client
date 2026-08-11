@@ -5,7 +5,9 @@ Edit and run [Strict](https://strict-lang.org/) (`.strict`) files in Visual Stud
 ## Features
 
 - **Syntax highlighting** for `.strict` files
-- **Language Server** integration (diagnostics, autocomplete, document highlight)
+- **Language Server** integration (diagnostics, autocomplete, document highlight, quick fixes)
+- **Readable diagnostics** — error codes are humanized (e.g. `EmptyLineIsNotAllowed` → “Empty line is not allowed”), with whole-line highlight
+- **Quick fixes** — lightbulb / **Alt+Enter** (or **Ctrl+.**) for common issues such as empty lines and bad whitespace
 - **Inline test results** in the gutter (green/red) from the language server test runner
 - **Inline variable values** after evaluation notifications
 - **Strict: Run File** — runs the current file through the Strict CLI in a terminal
@@ -14,8 +16,7 @@ Edit and run [Strict](https://strict-lang.org/) (`.strict`) files in Visual Stud
 
 ## Requirements
 
-1. [.NET 10 SDK](https://dotnet.microsoft.com/) (`dotnet` on PATH)
-2. Built [Strict](https://github.com/strict-lang/Strict) runtime next to this extension (recommended layout):
+Built [Strict](https://github.com/strict-lang/Strict) runtime next to this extension (recommended layout):
 
 ```text
 strict-lang/
@@ -23,17 +24,16 @@ strict-lang/
   strict-vscode-client/   # this extension
 ```
 
-Build the language server and CLI once:
+Build the language server with the strict CLI:
 
 ```powershell
-dotnet build ../Strict/Strict.LanguageServer/Strict.LanguageServer.csproj
-dotnet build ../Strict/Strict/Strict.csproj
+strict LanguageServer
 ```
 
 The extension auto-detects:
 
-- `../Strict/Strict.LanguageServer/bin/Debug|Release/net10.0/Strict.LanguageServer.dll`
-- `../Strict/Strict/bin/Debug|Release/net10.0/Strict.dll`
+- `../Strict/LanguageServer/LanguageServer.strictbinary`
+- `../Strict/strict.strictbinary`
 
 You can override paths in settings if your layout differs.
 
@@ -43,7 +43,7 @@ You can override paths in settings if your layout differs.
 | --- | --- |
 | `strict.languageServer.path` | Path to `Strict.LanguageServer.dll`, exe, or project. Empty = auto-detect |
 | `strict.cli.path` | Path to `Strict.dll` or exe for **Run File**. Empty = auto-detect |
-| `strict.dotnetPath` | `dotnet` host used to launch DLL builds (default `dotnet`) |
+| `strict.dotnetPath` | `dotnet` host used to launch DLL builds (default `dotnet`), older builds of Strict, should not longer be required |
 
 ## Commands
 

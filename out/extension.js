@@ -37,7 +37,9 @@ exports.activate = activate;
 exports.deactivate = deactivate;
 const vscode = __importStar(require("vscode"));
 const node_1 = require("vscode-languageclient/node");
+const codeActions_1 = require("./codeActions");
 const decorations_1 = require("./decorations");
+const diagnostics_1 = require("./diagnostics");
 const paths_1 = require("./paths");
 const server_1 = require("./server");
 const runMethodCommand = 'strict-vscode-client.run';
@@ -47,11 +49,14 @@ let client;
 let serverHandles;
 let output;
 let decorations;
+let diagnosticHighlighter;
+let clientCodeActions;
 async function activate(context) {
     output = vscode.window.createOutputChannel('Strict');
     decorations = new decorations_1.DecorationController(context.extensionPath);
+    diagnosticHighlighter = new diagnostics_1.DiagnosticHighlighter();
     (0, decorations_1.registerDecorationLifecycle)(context, decorations);
-    context.subscriptions.push(output);
+    context.subscriptions.push(output, diagnosticHighlighter);
     context.subscriptions.push(vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)), vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)), vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('strict')) {
             void restartServer(context);
@@ -89,6 +94,10 @@ async function startServer(context) {
             cancellationStrategy: node_1.CancellationStrategy.Message
         },
         middleware: {
+            handleDiagnostics: (uri, diagnostics, next) => {
+                const polished = diagnostics.map((item) => (0, diagnostics_1.polishDiagnostic)(item, uri));
+                next(uri, polished);
+            },
             executeCommand: async (command, args, next) => {
                 if (command !== runMethodCommand) {
                     return next(command, args);
@@ -115,14 +124,39 @@ async function startServer(context) {
         client.onNotification('valueEvaluationNotification', (message) => {
             decorations.applyValues(message);
         });
+        registerClientCodeActionsIfNeeded(context);
         output.appendLine(`Strict language server started via ${launch.displayName}`);
     }
     catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         output.appendLine(`Failed to start language server: ${text}`);
         void vscode.window.showErrorMessage(`Failed to start Strict language server: ${text}`);
+        // Still offer local quick fixes even if the server failed to start
+        ensureClientCodeActions(context);
         await stopServer();
     }
+}
+function registerClientCodeActionsIfNeeded(context) {
+    const capabilities = client?.initializeResult?.capabilities;
+    const serverHasCodeActions = Boolean(capabilities?.codeActionProvider);
+    if (serverHasCodeActions) {
+        output.appendLine('Using language server code actions (quick fixes)');
+        disposeClientCodeActions();
+        return;
+    }
+    output.appendLine('Language server has no code actions; enabling client-side quick fixes');
+    ensureClientCodeActions(context);
+}
+function ensureClientCodeActions(context) {
+    if (clientCodeActions) {
+        return;
+    }
+    clientCodeActions = (0, codeActions_1.registerCodeActionProvider)();
+    context.subscriptions.push(clientCodeActions);
+}
+function disposeClientCodeActions() {
+    clientCodeActions?.dispose();
+    clientCodeActions = undefined;
 }
 async function stopServer() {
     if (serverHandles) {

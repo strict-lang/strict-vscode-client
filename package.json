@@ -84,6 +84,11 @@
         "key": "ctrl+shift+r",
         "mac": "cmd+shift+r",
         "when": "editorTextFocus && resourceLangId == strict"
+      },
+      {
+        "command": "editor.action.quickFix",
+        "key": "alt+enter",
+        "when": "editorTextFocus && editorHasCodeActionsProvider && resourceLangId == strict"
       }
     ],
     "configuration": {
