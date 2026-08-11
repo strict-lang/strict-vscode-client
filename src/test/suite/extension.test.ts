@@ -1,15 +1,37 @@
 import * as assert from 'assert';
-
-// You can import and use all API from the 'vscode' module
-// as well as import your extension to test it
 import * as vscode from 'vscode';
-// import * as myExtension from '../../extension';
+import {
+	buildRunFileArgs,
+	languageServerPipeName,
+	resolveLanguageServerLaunch
+} from '../../paths';
 
 suite('Extension Test Suite', () => {
-	vscode.window.showInformationMessage('Start all tests.');
+	test('extension contributes strict language', async () => {
+		const extension = vscode.extensions.getExtension('strict-lang.strict-language');
+		assert.ok(extension, 'strict-lang.strict-language extension should be present');
+		await extension!.activate();
+		const languages = await vscode.languages.getLanguages();
+		assert.ok(languages.includes('strict'));
+	});
 
-	test('Sample test', () => {
-		assert.strictEqual(-1, [1, 2, 3].indexOf(5));
-		assert.strictEqual(-1, [1, 2, 3].indexOf(0));
+	test('pipe name matches language server', () => {
+		assert.strictEqual(languageServerPipeName, 'Strict.LanguageServer');
+	});
+
+	test('run file args keep cli launch prefix', () => {
+		const result = buildRunFileArgs(
+			{ command: 'dotnet', args: ['C:\\Strict.dll'], displayName: 'Strict.dll' },
+			'C:\\code\\Sum.strict'
+		);
+		assert.deepStrictEqual(result.args, ['C:\\Strict.dll', 'C:\\code\\Sum.strict']);
+	});
+
+	test('language server resolver returns undefined for empty roots', () => {
+		const launch = resolveLanguageServerLaunch({
+			workspaceFolders: [],
+			pathEnv: ''
+		});
+		assert.strictEqual(launch, undefined);
 	});
 });

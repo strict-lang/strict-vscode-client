@@ -1,142 +1,206 @@
-import { connect } from "net";
-import path = require("path");
-import { Range, Uri, window as Window, TextEditorDecorationType } from "vscode";
+import * as vscode from 'vscode';
 import {
-  LanguageClient,
-  StreamInfo,
-  CancellationStrategy,
-  integer,
-} from "vscode-languageclient/node";
+	CancellationStrategy,
+	LanguageClient,
+	LanguageClientOptions
+} from 'vscode-languageclient/node';
+import {
+	DecorationController,
+	registerDecorationLifecycle,
+	TestRunnerNotification,
+	ValueEvaluationNotification
+} from './decorations';
+import {
+	buildRunFileArgs,
+	resolveLanguageServerLaunch,
+	resolveStrictCliLaunch
+} from './paths';
+import { ServerHandles, startLanguageClient } from './server';
 
-let client: LanguageClient;
-export function activate() {
-  const connectFunc = () => {
-    return new Promise<StreamInfo>((resolve) => {
-      function tryConnect() {
-        const socket = connect(`\\\\.\\pipe\\Strict.LanguageServer`);
-        socket.on("connect", () => {
-          resolve({ writer: socket, reader: socket });
-        });
-        socket.on("error", (e) => {
-          setTimeout(tryConnect, 5000);
-        });
-      }
-      tryConnect();
-    });
-  };
+const runMethodCommand = 'strict-vscode-client.run';
+const runFileCommand = 'strict-vscode-client.runFile';
+const restartServerCommand = 'strict-vscode-client.restartServer';
 
-  client = new LanguageClient("strict", connectFunc, {
-    documentSelector: [
-      {
-        language: "strict",
-      },
-      {
-        pattern: "**/*.strict",
-      },
-    ],
-    progressOnInitialization: true,
-    connectionOptions: {
-      maxRestartCount: 10,
-      cancellationStrategy: CancellationStrategy.Message,
-    },
-    middleware: {
-      executeCommand: async (command, args, next) => {
-        const choices: string[] = [];
-        const quickPick = Window.createQuickPick();
-        quickPick.title = "Enter methodcall :";
-        quickPick.items = choices.map((choice) => ({ label: choice }));
-        quickPick.onDidChangeValue(() => {
-          if (!choices.includes(quickPick.value)) {
-            quickPick.items = [quickPick.value, ...choices].map((label) => ({
-              label,
-            }));
-          }
-        });
+let client: LanguageClient | undefined;
+let serverHandles: ServerHandles | undefined;
+let output: vscode.OutputChannel;
+let decorations: DecorationController;
 
-        quickPick.onDidAccept(() => {
-          const selection = quickPick.activeItems[0];
-          args = args.slice(0);
-          args.push(selection);
-          args.push(Window.activeTextEditor?.document.uri.fsPath);
-          quickPick.hide();
-          return next(command, args);
-        });
-        quickPick.show();
-      },
-    },
-  });
-  let red = Uri.parse("https://imgur.com/FQM0ACT.png"); //use actual icons
-  let green = Uri.parse("https://imgur.com/1cH046F.png"); //use actual icons
-  let decorationTypes = new Map<integer, TextEditorDecorationType>();
-  client.onNotification("testRunnerNotification", (testMessage: any) => {
-    var image = testMessage.state === 0 ? red : green;
-    var position = new Range(
-      testMessage.lineNumber,
-      0,
-      testMessage.lineNumber,
-      0
-    );
-    let decorationType = Window.createTextEditorDecorationType({
-      gutterIconPath: image,
-      gutterIconSize: "contain",
-    });
-    const editor = Window.activeTextEditor;
-    if (editor !== undefined) {
-      var possibleDecoration = decorationTypes.get(testMessage.lineNumber);
-      if (possibleDecoration === undefined) {
-        decorationTypes.set(testMessage.lineNumber, decorationType);
-        editor.setDecorations(decorationType, [
-          {
-            range: position,
-          },
-        ]);
-      } else {
-        editor.setDecorations(possibleDecoration, []);
-        decorationTypes.delete(testMessage.lineNumber);
-        decorationTypes.set(testMessage.lineNumber, decorationType);
-        editor.setDecorations(decorationType, [{ range: position }]);
-      }
-    }
-  });
-  client.onNotification(
-    "valueEvaluationNotification",
-    (variableStateNotificationMessage: any) => {
-      const editor = Window.activeTextEditor;
-
-      for (let key in variableStateNotificationMessage.lineTextPair) {
-        let variableValue = variableStateNotificationMessage.lineTextPair[key];
-        const decorationType = Window.createTextEditorDecorationType({
-          after: {
-            contentText: "  " + variableValue,
-            color: "#a9a9a9",
-          },
-        });
-        if (editor) {
-          const range = new Range(
-            Number(key),
-            editor.document.lineAt(Number(key)).text.length,
-            Number(key),
-            editor.document.lineAt(Number(key)).text.length
-          );
-
-          const decoration = {
-            range: range,
-            renderOptions: {},
-          };
-          editor.setDecorations(decorationType, []);
-          editor.setDecorations(decorationType, [decoration]);
-        }
-      }
-    }
-  );
-
-  client.registerProposedFeatures();
-  client.start();
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	output = vscode.window.createOutputChannel('Strict');
+	decorations = new DecorationController(context.extensionPath);
+	registerDecorationLifecycle(context, decorations);
+	context.subscriptions.push(output);
+	context.subscriptions.push(
+		vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)),
+		vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)),
+		vscode.workspace.onDidChangeConfiguration((event) => {
+			if (event.affectsConfiguration('strict')) {
+				void restartServer(context);
+			}
+		})
+	);
+	await startServer(context);
 }
 
-export function deactivate(): Thenable<void> | undefined {
-  if (!client) {
-    return undefined;
-  }
-  return client.stop();
+export async function deactivate(): Promise<void> {
+	await stopServer();
+}
+
+async function startServer(context: vscode.ExtensionContext): Promise<void> {
+	const config = vscode.workspace.getConfiguration('strict');
+	const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+	const launch = resolveLanguageServerLaunch({
+		configuredPath: config.get<string>('languageServer.path'),
+		dotnetPath: config.get<string>('dotnetPath'),
+		workspaceFolders,
+		extensionPath: context.extensionPath
+	});
+	if (!launch) {
+		const message = 'Strict language server not found. Build Strict.LanguageServer or set strict.languageServer.path';
+		output.appendLine(message);
+		void vscode.window.showWarningMessage(message);
+		return;
+	}
+	const clientOptions: LanguageClientOptions = {
+		documentSelector: [
+			{ language: 'strict' },
+			{ pattern: '**/*.strict' }
+		],
+		progressOnInitialization: true,
+		outputChannel: output,
+		connectionOptions: {
+			maxRestartCount: 3,
+			cancellationStrategy: CancellationStrategy.Message
+		},
+		middleware: {
+			executeCommand: async (command, args, next) => {
+				if (command !== runMethodCommand) {
+					return next(command, args);
+				}
+				const methodCall = await promptForMethodCall();
+				if (!methodCall) {
+					return undefined;
+				}
+				const documentUri = vscode.window.activeTextEditor?.document.uri.toString();
+				if (!documentUri) {
+					void vscode.window.showErrorMessage('Open a .strict file before running a method.');
+					return undefined;
+				}
+				return next(command, [{ label: methodCall }, documentUri]);
+			}
+		}
+	};
+	try {
+		serverHandles = await startLanguageClient(launch, clientOptions, output);
+		client = serverHandles.client;
+		client.onNotification('testRunnerNotification', (message: TestRunnerNotification) => {
+			decorations.applyTestResult(message);
+		});
+		client.onNotification('valueEvaluationNotification', (message: ValueEvaluationNotification) => {
+			decorations.applyValues(message);
+		});
+		output.appendLine(`Strict language server started via ${launch.displayName}`);
+	} catch (error) {
+		const text = error instanceof Error ? error.message : String(error);
+		output.appendLine(`Failed to start language server: ${text}`);
+		void vscode.window.showErrorMessage(`Failed to start Strict language server: ${text}`);
+		await stopServer();
+	}
+}
+
+async function stopServer(): Promise<void> {
+	if (serverHandles) {
+		await serverHandles.stop();
+		serverHandles = undefined;
+		client = undefined;
+	}
+}
+
+async function restartServer(context: vscode.ExtensionContext): Promise<void> {
+	output.appendLine('Restarting Strict language server...');
+	await stopServer();
+	await startServer(context);
+}
+
+async function promptForMethodCall(): Promise<string | undefined> {
+	const quickPick = vscode.window.createQuickPick();
+	quickPick.title = 'Strict method call';
+	quickPick.placeholder = 'e.g. Run or (1, 2, 3).Length';
+	quickPick.items = [{ label: 'Run' }];
+	quickPick.ignoreFocusOut = true;
+	return new Promise((resolve) => {
+		let settled = false;
+		const finish = (value: string | undefined) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			quickPick.hide();
+			quickPick.dispose();
+			resolve(value);
+		};
+		quickPick.onDidChangeValue(() => {
+			const value = quickPick.value.trim();
+			if (value.length === 0) {
+				quickPick.items = [{ label: 'Run' }];
+				return;
+			}
+			quickPick.items = [{ label: value }, { label: 'Run' }];
+		});
+		quickPick.onDidAccept(() => {
+			const selected = quickPick.selectedItems[0]?.label ?? quickPick.value.trim();
+			finish(selected.length > 0 ? selected : undefined);
+		});
+		quickPick.onDidHide(() => finish(undefined));
+		quickPick.show();
+	});
+}
+
+async function runCurrentFile(context: vscode.ExtensionContext): Promise<void> {
+	const editor = vscode.window.activeTextEditor;
+	if (!editor || editor.document.languageId !== 'strict') {
+		void vscode.window.showErrorMessage('Open a .strict file to run.');
+		return;
+	}
+	if (editor.document.isDirty) {
+		const saved = await editor.document.save();
+		if (!saved) {
+			return;
+		}
+	}
+	const config = vscode.workspace.getConfiguration('strict');
+	const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+	const launch = resolveStrictCliLaunch({
+		configuredPath: config.get<string>('cli.path'),
+		dotnetPath: config.get<string>('dotnetPath'),
+		workspaceFolders,
+		extensionPath: context.extensionPath
+	});
+	if (!launch) {
+		void vscode.window.showErrorMessage('Strict CLI not found. Build the Strict project or set strict.cli.path');
+		return;
+	}
+	const filePath = editor.document.uri.fsPath;
+	const { command, args } = buildRunFileArgs(launch, filePath);
+	const terminal = vscode.window.terminals.find((item) => item.name === 'Strict')
+		?? vscode.window.createTerminal({ name: 'Strict' });
+	terminal.show();
+	const commandLine = formatCommand(command, args);
+	output.appendLine(`Running: ${commandLine}`);
+	terminal.sendText(commandLine, true);
+}
+
+function formatCommand(command: string, args: string[]): string {
+	return [command, ...args].map(quoteIfNeeded).join(' ');
+}
+
+function quoteIfNeeded(value: string): string {
+	if (value.length === 0) {
+		return '""';
+	}
+	if (!/[\s"]/g.test(value)) {
+		return value;
+	}
+	return `"${value.replace(/"/g, '\\"')}"`;
 }

@@ -1,13 +1,27 @@
 {
-    "brackets": [
-        ["(", ")"]
-    ],
-    "autoClosingPairs": [
-        ["(", ")"],
-        ["\"", "\""]
-    ],
-    "surroundingPairs": [
-        ["(", ")"],
-        ["\"", "\""]
-    ]
+	"brackets": [
+		["(", ")"],
+		["[", "]"],
+		["{", "}"]
+	],
+	"autoClosingPairs": [
+		{ "open": "(", "close": ")" },
+		{ "open": "[", "close": "]" },
+		{ "open": "{", "close": "}" },
+		{ "open": "\"", "close": "\"", "notIn": ["string"] }
+	],
+	"surroundingPairs": [
+		["(", ")"],
+		["[", "]"],
+		["{", "}"],
+		["\"", "\""]
+	],
+	"indentationRules": {
+		"increaseIndentPattern": "^\\s*(if|else|for|has|constant|mutable|method|factory|generic|implement)\\b.*$",
+		"decreaseIndentPattern": "^\\s*(else)\\b.*$"
+	},
+	"wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
+	"folding": {
+		"offSide": true
+	}
 }

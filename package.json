@@ -1,33 +1,131 @@
 {
   "name": "strict-language",
   "displayName": "Strict Language",
-  "description": "Strict Language Server Protocol client, see https://strict-lang.org/ for more details.",
-  "version": "0.0.2",
+  "description": "Language support for Strict: syntax highlighting, LSP diagnostics, autocomplete, inline tests, and run commands. See https://strict-lang.org/",
+  "version": "0.1.0",
+  "publisher": "strict-lang",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/strict-lang/strict-vscode-client"
+  },
+  "homepage": "https://strict-lang.org/",
+  "bugs": {
+    "url": "https://github.com/strict-lang/strict-vscode-client/issues"
+  },
+  "license": "MIT",
   "engines": {
-    "vscode": "^1.109.0"
+    "vscode": "^1.85.0"
   },
   "categories": [
+    "Programming Languages",
+    "Linters",
     "Other"
+  ],
+  "keywords": [
+    "strict",
+    "strict-lang",
+    "language server",
+    "lsp"
+  ],
+  "activationEvents": [
+    "onLanguage:strict"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
+        "command": "strict-vscode-client.runFile",
+        "title": "Strict: Run File",
+        "icon": "$(play)"
+      },
+      {
         "command": "strict-vscode-client.run",
-        "title": "Run strict"
+        "title": "Strict: Run Method..."
+      },
+      {
+        "command": "strict-vscode-client.restartServer",
+        "title": "Strict: Restart Language Server"
       }
     ],
-    "languages": [{
-      "id": "strict",
-      "aliases": ["Strict", "strict"],
-      "extensions": [".strict"],
-      "configuration": "./language-configuration.json"
-  }],
-  "grammars": [{
-      "language": "strict",
-      "scopeName": "source.strict",
-      "path": "./syntaxes/strict.tmLanguage"
-  }]
+    "menus": {
+      "editor/title": [
+        {
+          "command": "strict-vscode-client.runFile",
+          "when": "resourceLangId == strict",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "strict-vscode-client.runFile",
+          "when": "resourceLangId == strict",
+          "group": "navigation@1"
+        },
+        {
+          "command": "strict-vscode-client.run",
+          "when": "resourceLangId == strict",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "strict-vscode-client.runFile",
+          "when": "resourceLangId == strict"
+        },
+        {
+          "command": "strict-vscode-client.run",
+          "when": "resourceLangId == strict"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "strict-vscode-client.runFile",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorTextFocus && resourceLangId == strict"
+      }
+    ],
+    "configuration": {
+      "title": "Strict",
+      "properties": {
+        "strict.languageServer.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to `Strict.LanguageServer.dll`, executable, or project folder. Empty = auto-detect sibling `Strict` repo build output or PATH."
+        },
+        "strict.cli.path": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to `Strict.dll` or Strict executable used by **Strict: Run File**. Empty = auto-detect."
+        },
+        "strict.dotnetPath": {
+          "type": "string",
+          "default": "dotnet",
+          "description": "dotnet host used when launching DLL builds of the language server or CLI."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "strict",
+        "aliases": [
+          "Strict",
+          "strict"
+        ],
+        "extensions": [
+          ".strict"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "strict",
+        "scopeName": "source.strict",
+        "path": "./syntaxes/strict.tmLanguage"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
@@ -35,15 +133,18 @@
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
-    "test": "node ./out/test/runTest.js"
+    "test:unit": "npm run compile && node ./out/test/unit/runUnitTests.js",
+    "test": "npm run test:unit",
+    "package": "vsce package"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^25.3.0",
-    "@types/vscode": "^1.109.0",
+    "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^8.56.0",
     "@typescript-eslint/parser": "^8.56.0",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.7.1",
     "eslint": "^10.0.1",
     "glob": "^13.0.6",
     "mocha": "^11.7.5",

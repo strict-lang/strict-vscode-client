@@ -1,9 +1,17 @@
 # Change Log
 
-All notable changes to the "strict-vscode-client" extension will be documented in this file.
+All notable changes to the Strict Language VS Code extension are documented in this file.
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## [0.1.0] - 2026-08-11
 
-## [Unreleased]
+- Auto-start `Strict.LanguageServer` from settings, sibling repo build output, or PATH
+- Connect over the `Strict.LanguageServer` named pipe with retries
+- Add **Strict: Run File** (terminal CLI), **Strict: Run Method...**, and **Strict: Restart Language Server**
+- Show local gutter icons for test pass/fail notifications
+- Render inline variable values from evaluation notifications
+- Add extension settings, menus, keybinding, and documentation
+- Add unit tests for path/launch resolution
 
-- Initial release
+## [0.0.2]
+
+- Earlier LSP client and syntax highlighting work

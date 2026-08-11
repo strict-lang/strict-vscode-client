@@ -1,71 +1,100 @@
-# strict-vscode-client README
+# Strict Language for VS Code
 
-This is the README for your extension "strict-vscode-client". After writing up a brief description, we recommend including the following sections.
+Edit and run [Strict](https://strict-lang.org/) (`.strict`) files in Visual Studio Code.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- **Syntax highlighting** for `.strict` files
+- **Language Server** integration (diagnostics, autocomplete, document highlight)
+- **Inline test results** in the gutter (green/red) from the language server test runner
+- **Inline variable values** after evaluation notifications
+- **Strict: Run File** — runs the current file through the Strict CLI in a terminal
+- **Strict: Run Method...** — asks for a method/expression and executes it through the language server
+- **Strict: Restart Language Server** — reloads the LSP after runtime rebuilds
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+1. [.NET 10 SDK](https://dotnet.microsoft.com/) (`dotnet` on PATH)
+2. Built [Strict](https://github.com/strict-lang/Strict) runtime next to this extension (recommended layout):
+
+```text
+strict-lang/
+  Strict/                 # runtime + language server
+  strict-vscode-client/   # this extension
+```
+
+Build the language server and CLI once:
+
+```powershell
+dotnet build ../Strict/Strict.LanguageServer/Strict.LanguageServer.csproj
+dotnet build ../Strict/Strict/Strict.csproj
+```
+
+The extension auto-detects:
+
+- `../Strict/Strict.LanguageServer/bin/Debug|Release/net10.0/Strict.LanguageServer.dll`
+- `../Strict/Strict/bin/Debug|Release/net10.0/Strict.dll`
+
+You can override paths in settings if your layout differs.
 
 ## Extension Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+| Setting | Meaning |
+| --- | --- |
+| `strict.languageServer.path` | Path to `Strict.LanguageServer.dll`, exe, or project. Empty = auto-detect |
+| `strict.cli.path` | Path to `Strict.dll` or exe for **Run File**. Empty = auto-detect |
+| `strict.dotnetPath` | `dotnet` host used to launch DLL builds (default `dotnet`) |
 
-For example:
+## Commands
 
-This extension contributes the following settings:
+| Command | Default keybinding | Description |
+| --- | --- | --- |
+| `Strict: Run File` | `Ctrl+Shift+R` / `Cmd+Shift+R` | Save and run current `.strict` file via CLI |
+| `Strict: Run Method...` | — | Prompt for expression and run through LSP |
+| `Strict: Restart Language Server` | — | Stop/start LSP process |
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+Also available from the editor title play icon and the editor context menu on `.strict` files.
 
-## Known Issues
+## Development
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+```powershell
+npm install
+npm run compile
+npm run test:unit
+```
+
+Press **F5** in VS Code (`Run Extension`) to launch an Extension Development Host.
+
+Useful scripts:
+
+- `npm run watch` — compile on change
+- `npm run lint` — ESLint
+- `npm run package` — create a `.vsix` (requires `@vscode/vsce`)
+
+## How the language server connects
+
+`Strict.LanguageServer` listens on the Windows named pipe `Strict.LanguageServer`. On activation the extension:
+
+1. Resolves the server binary (setting → sibling repo build → PATH)
+2. Starts the process
+3. Connects over the named pipe with retries
+4. Speaks standard LSP plus Strict notifications:
+   - `testRunnerNotification` — gutter test pass/fail
+   - `valueEvaluationNotification` — inline values
+
+Logs appear in the **Strict** output channel.
+
+## Known limitations
+
+- Named-pipe transport matches the current language server (Windows-focused)
+- Semantic features depend on a working Strict language server build
+- Run Method uses the LSP command `strict-vscode-client.run` implemented server-side
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
+### 0.1.0
 
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+- Auto-start Strict language server from sibling repo / settings
+- Run File terminal integration and Run Method prompt
+- Local gutter icons for test results
+- Settings, menus, keybinding, and real README
