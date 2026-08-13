@@ -6,9 +6,10 @@ Edit and run [Strict](https://strict-lang.org/) (`.strict`) files in Visual Stud
 
 - **Syntax highlighting** for `.strict` files
 - **Language Server** integration (diagnostics, autocomplete, document highlight, quick fixes)
-- **Readable diagnostics** — error codes are humanized (e.g. `EmptyLineIsNotAllowed` → “Empty line is not allowed”), with whole-line highlight
+- **Readable diagnostics** — error codes are humanized, exception **messages and extra details** are shown (not just the type name)
 - **Quick fixes** — lightbulb / **Alt+Enter** (or **Ctrl+.**) for common issues such as empty lines and bad whitespace
-- **Inline test results** in the gutter (green/red) from the language server test runner
+- **SCrunch** — runs next to normal analytics. Parse errors, violations, and failing tests are all blockers. Tests run as soon as a file parses; a fresh sibling `.strictbinary` means last run parsed, built, and passed — folder load reuses that cache until you edit.
+- **Inline test dots** — small green/red gutter marks; hover shows who ran, the expression, duration, and why it failed
 - **Inline variable values** after evaluation notifications
 - **Strict: Run File** — runs the current file through the Strict CLI in a terminal
 - **Strict: Run Method...** — asks for a method/expression and executes it through the language server
@@ -52,6 +53,7 @@ You can override paths in settings if your layout differs.
 | `Strict: Run File` | `Ctrl+Shift+R` / `Cmd+Shift+R` | Save and run current `.strict` file via CLI |
 | `Strict: Run Method...` | — | Prompt for expression and run through LSP |
 | `Strict: Restart Language Server` | — | Stop/start LSP process |
+| `SCrunch: Show Tests` | — | Focus the Testing view (SCrunch tree) |
 
 Also available from the editor title play icon and the editor context menu on `.strict` files.
 
@@ -79,10 +81,27 @@ Useful scripts:
 2. Starts the process
 3. Connects over the named pipe with retries
 4. Speaks standard LSP plus Strict notifications:
-   - `testRunnerNotification` — gutter test pass/fail
+   - `testRunnerNotification` — gutter + SCrunch Test Explorer (expression, method, duration, stack)
    - `valueEvaluationNotification` — inline values
 
 Logs appear in the **Strict** output channel.
+
+## SCrunch MCP (no IDE)
+
+The language server also speaks MCP over stdio so an LLM can verify `.strict` changes without VS Code:
+
+```powershell
+dotnet ../Strict/Strict.LanguageServer/bin/Debug/net10.0/Strict.LanguageServer.dll --mcp
+```
+
+This repo ships `.mcp.json` and `.grok/config.toml` that start that process. Tools:
+
+| Tool | What it does |
+| --- | --- |
+| `check` | Parse + diagnostics + SCrunch tests for a file or folder. Fresh `.strictbinary` counts as pass unless `force` is true. `ok: true` means nothing to fix. |
+| `status` | Cache freshness only (no re-run) |
+
+After editing Strict files, call `scrunch__check` with the file or folder path. If `ok` is false, fix the `problems` list (same class of error as in the editor: parse, violation, or failing test).
 
 ## Known limitations
 

@@ -28,7 +28,8 @@
     "lsp"
   ],
   "activationEvents": [
-    "onLanguage:strict"
+    "onLanguage:strict",
+    "workspaceContains:**/*.strict"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -45,6 +46,10 @@
       {
         "command": "strict-vscode-client.restartServer",
         "title": "Strict: Restart Language Server"
+      },
+      {
+        "command": "strict-vscode-client.scrunch.focus",
+        "title": "SCrunch: Show Tests"
       }
     ],
     "menus": {
@@ -75,6 +80,9 @@
         {
           "command": "strict-vscode-client.run",
           "when": "resourceLangId == strict"
+        },
+        {
+          "command": "strict-vscode-client.scrunch.focus"
         }
       ]
     },

@@ -39,36 +39,71 @@ function isLower(char: string): boolean {
 	return char >= 'a' && char <= 'z';
 }
 
+function stripTypePrefix(text: string): string {
+	const colon = text.indexOf(':');
+	if (colon <= 0 || text.slice(0, colon).includes(' ')) {
+		return text;
+	}
+	const after = text.slice(colon + 1).trim();
+	return after && !after.startsWith('at ') ? after : '';
+}
+
+function isStackLocationLine(line: string): boolean {
+	return line.startsWith('at ') && line.includes(':line ');
+}
+
+function isInstructionOrSourceDump(line: string): boolean {
+	return (
+		line.startsWith('Instructions ') ||
+		line.startsWith('>>>') ||
+		/^\d+:/.test(line) ||
+		/^>>>?\s+\d+:/.test(line)
+	);
+}
+
 export function extractDiagnosticDetail(message: string): string {
 	if (!message) {
 		return '';
 	}
 	const atIndex = message.indexOf('\n   at ');
-	const detail = (atIndex >= 0 ? message.slice(0, atIndex) : message).trim();
-	// Drop raw exception type prefix if present: "EmptyLineIsNotAllowed: ..."
-	const colon = detail.indexOf(':');
-	if (colon > 0 && !detail.slice(0, colon).includes(' ')) {
-		const after = detail.slice(colon + 1).trim();
-		// Ignore stack-location-only remnants
-		if (!after || after.startsWith('at ') || after.includes(':line ')) {
-			return '';
+	const withoutStack = (atIndex >= 0 ? message.slice(0, atIndex) : message).trim();
+	const useful: string[] = [];
+	for (const rawLine of withoutStack.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) {
+			continue;
 		}
-		return after;
+		if (isStackLocationLine(line)) {
+			if (useful.length === 0) {
+				return '';
+			}
+			continue;
+		}
+		if (line.includes(':line ')) {
+			break;
+		}
+		if (isInstructionOrSourceDump(line)) {
+			break;
+		}
+		const cleaned = stripTypePrefix(line);
+		if (cleaned) {
+			useful.push(cleaned);
+		}
 	}
-	if (detail.startsWith('at ') || detail.includes(':line ')) {
-		return '';
-	}
-	return detail;
+	return useful.join('\n');
 }
 
 export function formatDiagnosticMessage(code: string | undefined, message: string): string {
 	const humanized = code ? humanizePascalCase(String(code)) : '';
 	const detail = extractDiagnosticDetail(message);
-	if (humanized && detail && detail.toLowerCase() !== humanized.toLowerCase()) {
-		return `${humanized}: ${detail}`;
+	if (!humanized) {
+		return detail || message;
 	}
-	if (humanized) {
+	if (!detail || detail.toLowerCase() === humanized.toLowerCase()) {
 		return humanized;
 	}
-	return detail || message;
+	if (detail.toLowerCase().startsWith(`${humanized.toLowerCase()}:`)) {
+		return detail;
+	}
+	return `${humanized}: ${detail}`;
 }

@@ -41,6 +41,7 @@ const codeActions_1 = require("./codeActions");
 const decorations_1 = require("./decorations");
 const diagnostics_1 = require("./diagnostics");
 const paths_1 = require("./paths");
+const scrunch_1 = require("./scrunch");
 const server_1 = require("./server");
 const runMethodCommand = 'strict-vscode-client.run';
 const runFileCommand = 'strict-vscode-client.runFile';
@@ -49,15 +50,17 @@ let client;
 let serverHandles;
 let output;
 let decorations;
+let scrunch;
 let diagnosticHighlighter;
 let clientCodeActions;
 async function activate(context) {
     output = vscode.window.createOutputChannel('Strict');
     decorations = new decorations_1.DecorationController(context.extensionPath);
+    scrunch = (0, scrunch_1.registerScrunch)();
     diagnosticHighlighter = new diagnostics_1.DiagnosticHighlighter();
     (0, decorations_1.registerDecorationLifecycle)(context, decorations);
-    context.subscriptions.push(output, diagnosticHighlighter);
-    context.subscriptions.push(vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)), vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)), vscode.workspace.onDidChangeConfiguration((event) => {
+    context.subscriptions.push(output, diagnosticHighlighter, scrunch);
+    context.subscriptions.push(vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)), vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)), vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => vscode.commands.executeCommand('workbench.view.testing.focus')), vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('strict')) {
             void restartServer(context);
         }
@@ -120,12 +123,14 @@ async function startServer(context) {
         client = serverHandles.client;
         client.onNotification('testRunnerNotification', (message) => {
             decorations.applyTestResult(message);
+            scrunch.applyResult(message);
         });
         client.onNotification('valueEvaluationNotification', (message) => {
             decorations.applyValues(message);
         });
         registerClientCodeActionsIfNeeded(context);
         output.appendLine(`Strict language server started via ${launch.displayName}`);
+        scrunch.onLanguageServerReady();
     }
     catch (error) {
         const text = error instanceof Error ? error.message : String(error);

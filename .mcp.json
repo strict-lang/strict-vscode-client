@@ -1,0 +1,14 @@
+{
+  "inputs": [],
+  "servers": {
+    "scrunch": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "../Strict/Strict.LanguageServer/bin/Debug/net10.0/Strict.LanguageServer.dll",
+        "--mcp"
+      ],
+      "env": {}
+    }
+  }
+}

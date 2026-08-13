@@ -1,0 +1,100 @@
+export type TestRunnerNotification = {
+	lineNumber: number;
+	state: number;
+	uri?: string;
+	expression?: string;
+	methodName?: string;
+	typeName?: string;
+	message?: string;
+	details?: string;
+	durationMs?: number;
+	stackTrace?: string;
+	cached?: boolean;
+};
+
+export type StackFrame = {
+	label: string;
+	file: string;
+	line: number;
+};
+
+export function formatDuration(durationMs: number | undefined): string | undefined {
+	if (durationMs === undefined || Number.isNaN(durationMs)) {
+		return undefined;
+	}
+	if (durationMs < 0.05) {
+		return '<0.1ms';
+	}
+	if (durationMs < 10) {
+		return `${durationMs.toFixed(1)}ms`;
+	}
+	if (durationMs < 1000) {
+		return `${Math.round(durationMs)}ms`;
+	}
+	return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+export function parseStackFrames(text: string | undefined): StackFrame[] {
+	if (!text) {
+		return [];
+	}
+	const frames: StackFrame[] = [];
+	const pattern = /at (.+?) in (.+):line (\d+)/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(text)) !== null) {
+		frames.push({
+			label: match[1].trim(),
+			file: match[2].trim(),
+			line: Number(match[3])
+		});
+	}
+	return frames;
+}
+
+export function formatFailureOutput(message: TestRunnerNotification): string {
+	const lines: string[] = [];
+	if (message.expression) {
+		lines.push(message.expression);
+	}
+	const owner = [message.typeName, message.methodName].filter(Boolean).join('.');
+	if (owner) {
+		lines.push(owner);
+	}
+	if (message.details) {
+		lines.push(message.details);
+	}
+	if (message.message && message.message !== message.details) {
+		lines.push(message.message);
+	}
+	const stack = message.stackTrace || message.message;
+	const frames = parseStackFrames(stack);
+	if (frames.length > 0) {
+		lines.push('');
+		lines.push('Stack');
+		for (const frame of frames) {
+			lines.push(`at ${frame.label} in ${frame.file}:line ${frame.line}`);
+		}
+	} else if (message.stackTrace) {
+		lines.push('');
+		lines.push(message.stackTrace);
+	}
+	return lines.join('\n');
+}
+
+export function formatTestHover(message: TestRunnerNotification): string {
+	const passed = message.state !== 0;
+	const expression = message.expression?.trim();
+	const duration = message.cached ? 'cached' : formatDuration(message.durationMs);
+	const title = expression ? `${passed ? 'Passed' : 'Failed'} \`${expression}\`` : (passed ? 'Passed' : 'Failed');
+	const lines = [duration ? `${title}  ${duration}` : title];
+	if (message.methodName) {
+		lines.push(message.methodName);
+	}
+	if (!passed && message.details) {
+		lines.push(message.details);
+	}
+	if (!passed && message.message && message.message !== message.details) {
+		lines.push(message.message);
+	}
+	return lines.join('\n');
+}

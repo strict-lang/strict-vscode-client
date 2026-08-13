@@ -1,38 +1,44 @@
 import * as path from 'path';
 import {
+	DecorationOptions,
 	ExtensionContext,
+	MarkdownString,
 	Range,
 	TextEditor,
 	TextEditorDecorationType,
 	Uri,
 	window
 } from 'vscode';
+import { formatTestHover, TestRunnerNotification } from './testResults';
 
-export type TestRunnerNotification = {
-	lineNumber: number;
-	state: number;
-};
+export type { TestRunnerNotification } from './testResults';
+export { formatTestHover } from './testResults';
 
 export type ValueEvaluationNotification = {
 	lineTextPair: Record<string, string>;
 };
 
 export class DecorationController {
-	private readonly passIcon: Uri;
-	private readonly failIcon: Uri;
-	private readonly testDecorations = new Map<number, TextEditorDecorationType>();
+	private readonly passType: TextEditorDecorationType;
+	private readonly failType: TextEditorDecorationType;
+	private readonly testsByUri = new Map<string, Map<number, TestRunnerNotification>>();
 	private readonly valueDecorations = new Map<number, TextEditorDecorationType>();
 
 	constructor(extensionPath: string) {
-		this.passIcon = Uri.file(path.join(extensionPath, 'media', 'test-pass.svg'));
-		this.failIcon = Uri.file(path.join(extensionPath, 'media', 'test-fail.svg'));
+		this.passType = window.createTextEditorDecorationType({
+			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-pass.svg')),
+			gutterIconSize: 'contain'
+		});
+		this.failType = window.createTextEditorDecorationType({
+			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-fail.svg')),
+			gutterIconSize: 'contain'
+		});
 	}
 
 	public dispose(): void {
-		for (const decoration of this.testDecorations.values()) {
-			decoration.dispose();
-		}
-		this.testDecorations.clear();
+		this.passType.dispose();
+		this.failType.dispose();
+		this.testsByUri.clear();
 		for (const decoration of this.valueDecorations.values()) {
 			decoration.dispose();
 		}
@@ -41,25 +47,19 @@ export class DecorationController {
 
 	public applyTestResult(message: TestRunnerNotification): void {
 		const editor = window.activeTextEditor;
-		if (!editor) {
+		const uri = message.uri || editor?.document.uri.toString();
+		if (!uri) {
 			return;
 		}
-		const lineNumber = message.lineNumber;
-		if (lineNumber < 0 || lineNumber >= editor.document.lineCount) {
-			return;
+		let byLine = this.testsByUri.get(uri);
+		if (!byLine) {
+			byLine = new Map();
+			this.testsByUri.set(uri, byLine);
 		}
-		const existing = this.testDecorations.get(lineNumber);
-		if (existing) {
-			existing.dispose();
-			this.testDecorations.delete(lineNumber);
+		byLine.set(message.lineNumber, message);
+		if (editor && editor.document.uri.toString() === uri) {
+			this.refreshTests(editor);
 		}
-		const icon = message.state === 0 ? this.failIcon : this.passIcon;
-		const decorationType = window.createTextEditorDecorationType({
-			gutterIconPath: icon,
-			gutterIconSize: 'contain'
-		});
-		this.testDecorations.set(lineNumber, decorationType);
-		editor.setDecorations(decorationType, [{ range: new Range(lineNumber, 0, lineNumber, 0) }]);
 	}
 
 	public applyValues(message: ValueEvaluationNotification): void {
@@ -90,15 +90,42 @@ export class DecorationController {
 			}]);
 		}
 	}
+
+	public refreshActiveEditor(): void {
+		const editor = window.activeTextEditor;
+		if (editor) {
+			this.refreshTests(editor);
+		}
+	}
+
+	private refreshTests(editor: TextEditor): void {
+		const byLine = this.testsByUri.get(editor.document.uri.toString());
+		const passed: DecorationOptions[] = [];
+		const failed: DecorationOptions[] = [];
+		if (byLine) {
+			for (const message of byLine.values()) {
+				if (message.lineNumber < 0 || message.lineNumber >= editor.document.lineCount) {
+					continue;
+				}
+				const hover = new MarkdownString();
+				hover.appendMarkdown(formatTestHover(message).replace(/\n/g, '\n\n'));
+				const item: DecorationOptions = {
+					range: new Range(message.lineNumber, 0, message.lineNumber, 0),
+					hoverMessage: hover
+				};
+				(message.state === 0 ? failed : passed).push(item);
+			}
+		}
+		editor.setDecorations(this.passType, passed);
+		editor.setDecorations(this.failType, failed);
+	}
 }
 
 export function registerDecorationLifecycle(context: ExtensionContext, decorations: DecorationController): void {
 	context.subscriptions.push({ dispose: () => decorations.dispose() });
 	context.subscriptions.push(window.onDidChangeActiveTextEditor((editor: TextEditor | undefined) => {
-		if (!editor) {
-			return;
+		if (editor) {
+			decorations.refreshActiveEditor();
 		}
-		// Decorations are editor-bound; clearing avoids stale icons on file switch.
-		decorations.dispose();
 	}));
 }

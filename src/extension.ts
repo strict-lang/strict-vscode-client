@@ -17,6 +17,7 @@ import {
 	resolveLanguageServerLaunch,
 	resolveStrictCliLaunch
 } from './paths';
+import { registerScrunch, ScrunchController } from './scrunch';
 import { ServerHandles, startLanguageClient } from './server';
 
 const runMethodCommand = 'strict-vscode-client.run';
@@ -27,18 +28,22 @@ let client: LanguageClient | undefined;
 let serverHandles: ServerHandles | undefined;
 let output: vscode.OutputChannel;
 let decorations: DecorationController;
+let scrunch: ScrunchController;
 let diagnosticHighlighter: DiagnosticHighlighter | undefined;
 let clientCodeActions: vscode.Disposable | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	output = vscode.window.createOutputChannel('Strict');
 	decorations = new DecorationController(context.extensionPath);
+	scrunch = registerScrunch();
 	diagnosticHighlighter = new DiagnosticHighlighter();
 	registerDecorationLifecycle(context, decorations);
-	context.subscriptions.push(output, diagnosticHighlighter);
+	context.subscriptions.push(output, diagnosticHighlighter, scrunch);
 	context.subscriptions.push(
 		vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)),
 		vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)),
+		vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () =>
+			vscode.commands.executeCommand('workbench.view.testing.focus')),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration('strict')) {
 				void restartServer(context);
@@ -105,12 +110,14 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 		client = serverHandles.client;
 		client.onNotification('testRunnerNotification', (message: TestRunnerNotification) => {
 			decorations.applyTestResult(message);
+			scrunch.applyResult(message);
 		});
 		client.onNotification('valueEvaluationNotification', (message: ValueEvaluationNotification) => {
 			decorations.applyValues(message);
 		});
 		registerClientCodeActionsIfNeeded(context);
 		output.appendLine(`Strict language server started via ${launch.displayName}`);
+		scrunch.onLanguageServerReady();
 	} catch (error) {
 		const text = error instanceof Error ? error.message : String(error);
 		output.appendLine(`Failed to start language server: ${text}`);
