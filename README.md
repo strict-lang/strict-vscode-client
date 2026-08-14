@@ -8,8 +8,9 @@ Edit and run [Strict](https://strict-lang.org/) (`.strict`) files in Visual Stud
 - **Language Server** integration (diagnostics, autocomplete, document highlight, quick fixes)
 - **Readable diagnostics** — error codes are humanized, exception **messages and extra details** are shown (not just the type name)
 - **Quick fixes** — lightbulb / **Alt+Enter** (or **Ctrl+.**) for common issues such as empty lines and bad whitespace
-- **SCrunch** — runs next to normal analytics. Parse errors, violations, and failing tests are all blockers. Tests run as soon as a file parses; a fresh sibling `.strictbinary` means last run parsed, built, and passed — folder load reuses that cache until you edit.
-- **Inline test dots** — small green/red gutter marks; hover shows who ran, the expression, duration, and why it failed
+- **SCrunch** — runs next to normal analytics. Parse errors, violations, and failing tests are all blockers. Tests run when a file is opened or saved; a fresh sibling `.strictbinary` means last run parsed, built, and passed — folder load reuses that cache until you edit.
+- **Inline test dots** — green/red gutter marks on every covered line; hover lists the tests that called that line. Click a test to see just that result (no rerun). Duration is in microseconds.
+- **Testing view** — type → methods that have tests. Green if all good, red if anything needs fixing. **SCrunch: Show in Testing** focuses that tree.
 - **Inline variable values** after evaluation notifications
 - **Strict: Run File** — runs the current file through the Strict CLI in a terminal
 - **Strict: Run Method...** — asks for a method/expression and executes it through the language server
@@ -53,7 +54,8 @@ You can override paths in settings if your layout differs.
 | `Strict: Run File` | `Ctrl+Shift+R` / `Cmd+Shift+R` | Save and run current `.strict` file via CLI |
 | `Strict: Run Method...` | — | Prompt for expression and run through LSP |
 | `Strict: Restart Language Server` | — | Stop/start LSP process |
-| `SCrunch: Show Tests` | — | Focus the Testing view (SCrunch tree) |
+| `SCrunch: Show in Testing` | — | Focus the Testing view (SCrunch tree) |
+| `SCrunch: Show Tests for Line` | — | List tests that covered the current line and show that result |
 
 Also available from the editor title play icon and the editor context menu on `.strict` files.
 

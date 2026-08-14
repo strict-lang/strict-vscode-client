@@ -22,8 +22,8 @@ export function formatDuration(durationMs: number | undefined): string | undefin
 	if (durationMs === undefined || Number.isNaN(durationMs)) {
 		return undefined;
 	}
-	if (durationMs < 0.05) {
-		return '<0.1ms';
+	if (durationMs < 1) {
+		return `${Math.max(1, Math.round(durationMs * 1000))}us`;
 	}
 	if (durationMs < 10) {
 		return `${durationMs.toFixed(1)}ms`;
@@ -97,4 +97,31 @@ export function formatTestHover(message: TestRunnerNotification): string {
 		lines.push(message.message);
 	}
 	return lines.join('\n');
+}
+
+export function formatSingleTestOutput(message: TestRunnerNotification): string {
+	const passed = message.state !== 0;
+	const duration = message.cached ? 'cached' : formatDuration(message.durationMs);
+	if (passed) {
+		const lines = [message.expression, [message.typeName, message.methodName].filter(Boolean).join('.')].
+			filter((line) => line && line.length > 0) as string[];
+		lines.push(duration ? `passed  ${duration}` : 'passed');
+		return lines.join('\n');
+	}
+	const body = formatFailureOutput(message);
+	return duration ? `${body}\nfailed  ${duration}` : `${body}\nfailed`;
+}
+
+export function formatLineTests(tests: TestRunnerNotification[]): string {
+	if (tests.length === 0) {
+		return 'No tests covered this line';
+	}
+	return tests.map((test) => {
+		const passed = test.state !== 0;
+		const duration = test.cached ? 'cached' : formatDuration(test.durationMs);
+		const status = passed ? 'passed' : 'failed';
+		const expression = test.expression?.trim() || `line ${test.lineNumber + 1}`;
+		const suffix = duration ? `  ${duration}` : '';
+		return `${status}  ${expression}${suffix}`;
+	}).join('\n');
 }

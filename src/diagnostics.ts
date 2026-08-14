@@ -1,8 +1,11 @@
 import {
 	Diagnostic,
+	DiagnosticRelatedInformation,
 	Disposable,
 	languages,
+	Location,
 	OverviewRulerLane,
+	Position,
 	Range,
 	TextDocument,
 	TextEditorDecorationType,
@@ -11,6 +14,7 @@ import {
 	workspace
 } from 'vscode';
 import { formatDiagnosticMessage } from './diagnosticMessages';
+import { parseStackFrames } from './testResults';
 
 export {
 	extractDiagnosticDetail,
@@ -56,8 +60,29 @@ export function polishDiagnostic(diagnostic: Diagnostic, uri: Uri): Diagnostic {
 		diagnostic.source === 'Strict.Language' || !diagnostic.source ? 'strict' : diagnostic.source;
 	// Unnecessary fades the underline — never keep it on parse errors
 	polished.tags = undefined;
-	polished.relatedInformation = diagnostic.relatedInformation;
+	polished.relatedInformation = relatedInformation(diagnostic, uri);
 	return polished;
+}
+
+function relatedInformation(diagnostic: Diagnostic, uri: Uri): DiagnosticRelatedInformation[] {
+	const existing = diagnostic.relatedInformation ?? [];
+	const frames = parseStackFrames(diagnostic.message);
+	if (frames.length === 0) {
+		return existing.length > 0 ? [...existing] : [];
+	}
+	const extras = frames.map((frame) => {
+		let file: Uri;
+		try {
+			file = Uri.file(frame.file);
+		} catch {
+			file = uri;
+		}
+		return new DiagnosticRelatedInformation(
+			new Location(file, new Position(Math.max(0, frame.line - 1), 0)),
+			frame.label
+		);
+	});
+	return [...existing, ...extras];
 }
 
 /**

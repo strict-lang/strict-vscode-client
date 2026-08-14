@@ -62,7 +62,7 @@ suite('diagnostics', () => {
 		].join('\n');
 		assert.strictEqual(
 			formatDiagnosticMessage('InstructionExecutionFailed', raw),
-			"Instruction execution failed: FieldLoad on non-struct value for field 'value'\nin Strict/Boolean.not"
+			"Instruction execution failed: FieldLoad on non-struct value for field 'value'\nin Strict/Boolean.not\nat Strict/Boolean.not in C:\\repo\\Boolean.strict:line 4"
 		);
 	});
 
@@ -74,5 +74,19 @@ suite('diagnostics', () => {
 			),
 			"Instruction execution failed: FieldLoad on non-struct value for field 'value'\nStrict.InstructionExecutionFailed"
 		);
+	});
+
+	test('formatDiagnosticMessage appends stack frames so the hover has a clickable reason', () => {
+		const formatted = formatDiagnosticMessage(
+			'InstructionExecutionFailed',
+			[
+				"FieldLoad on non-struct value for field 'value'",
+				'   in Strict/Boolean.not',
+				'   at Strict/Boolean.not in C:\\repo\\Boolean.strict:line 4'
+			].join('\n')
+		);
+		assert.ok(formatted.startsWith(
+			"Instruction execution failed: FieldLoad on non-struct value for field 'value'"));
+		assert.ok(formatted.includes('at Strict/Boolean.not in C:\\repo\\Boolean.strict:line 4'));
 	});
 });

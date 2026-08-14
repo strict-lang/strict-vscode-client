@@ -9,10 +9,13 @@ import {
 	Uri,
 	window
 } from 'vscode';
-import { formatTestHover, TestRunnerNotification } from './testResults';
+import { LineCoverageMark } from './scrunchModel';
+import { formatDuration, TestRunnerNotification } from './testResults';
 
 export type { TestRunnerNotification } from './testResults';
 export { formatTestHover } from './testResults';
+
+export const showResultCommand = 'strict-vscode-client.scrunch.showResult';
 
 export type ValueEvaluationNotification = {
 	lineTextPair: Record<string, string>;
@@ -21,7 +24,7 @@ export type ValueEvaluationNotification = {
 export class DecorationController {
 	private readonly passType: TextEditorDecorationType;
 	private readonly failType: TextEditorDecorationType;
-	private readonly testsByUri = new Map<string, Map<number, TestRunnerNotification>>();
+	private readonly marksByUri = new Map<string, Map<number, LineCoverageMark>>();
 	private readonly valueDecorations = new Map<number, TextEditorDecorationType>();
 
 	constructor(extensionPath: string) {
@@ -38,28 +41,32 @@ export class DecorationController {
 	public dispose(): void {
 		this.passType.dispose();
 		this.failType.dispose();
-		this.testsByUri.clear();
+		this.marksByUri.clear();
 		for (const decoration of this.valueDecorations.values()) {
 			decoration.dispose();
 		}
 		this.valueDecorations.clear();
 	}
 
-	public applyTestResult(message: TestRunnerNotification): void {
+	public applyCoverage(uri: string, marks: LineCoverageMark[]): void {
+		const map = new Map(marks.map((mark) => [mark.lineNumber, mark]));
+		for (const key of uriKeys(uri)) {
+			this.marksByUri.set(key, map);
+		}
 		const editor = window.activeTextEditor;
-		const uri = message.uri || editor?.document.uri.toString();
-		if (!uri) {
-			return;
-		}
-		let byLine = this.testsByUri.get(uri);
-		if (!byLine) {
-			byLine = new Map();
-			this.testsByUri.set(uri, byLine);
-		}
-		byLine.set(message.lineNumber, message);
-		if (editor && editor.document.uri.toString() === uri) {
+		if (editor && uriKeys(editor.document.uri.toString()).some((key) => this.marksByUri.has(key))) {
 			this.refreshTests(editor);
 		}
+	}
+
+	public marksFor(uri: string, lineNumber: number): LineCoverageMark | undefined {
+		for (const key of uriKeys(uri)) {
+			const mark = this.marksByUri.get(key)?.get(lineNumber);
+			if (mark) {
+				return mark;
+			}
+		}
+		return undefined;
 	}
 
 	public applyValues(message: ValueEvaluationNotification): void {
@@ -98,27 +105,67 @@ export class DecorationController {
 		}
 	}
 
+	private marksForUri(uri: string): Map<number, LineCoverageMark> | undefined {
+		for (const key of uriKeys(uri)) {
+			const marks = this.marksByUri.get(key);
+			if (marks) {
+				return marks;
+			}
+		}
+		return undefined;
+	}
+
 	private refreshTests(editor: TextEditor): void {
-		const byLine = this.testsByUri.get(editor.document.uri.toString());
+		const byLine = this.marksForUri(editor.document.uri.toString());
 		const passed: DecorationOptions[] = [];
 		const failed: DecorationOptions[] = [];
 		if (byLine) {
-			for (const message of byLine.values()) {
-				if (message.lineNumber < 0 || message.lineNumber >= editor.document.lineCount) {
+			for (const mark of byLine.values()) {
+				if (mark.lineNumber < 0 || mark.lineNumber >= editor.document.lineCount) {
 					continue;
 				}
-				const hover = new MarkdownString();
-				hover.appendMarkdown(formatTestHover(message).replace(/\n/g, '\n\n'));
 				const item: DecorationOptions = {
-					range: new Range(message.lineNumber, 0, message.lineNumber, 0),
-					hoverMessage: hover
+					range: new Range(mark.lineNumber, 0, mark.lineNumber, 0),
+					hoverMessage: coverageHover(editor.document.uri, mark)
 				};
-				(message.state === 0 ? failed : passed).push(item);
+				(mark.failed ? failed : passed).push(item);
 			}
 		}
 		editor.setDecorations(this.passType, passed);
 		editor.setDecorations(this.failType, failed);
 	}
+}
+
+function coverageHover(uri: Uri, mark: LineCoverageMark): MarkdownString {
+	const hover = new MarkdownString(undefined, true);
+	hover.isTrusted = { enabledCommands: [showResultCommand] };
+	hover.supportThemeIcons = true;
+	if (mark.tests.length === 0) {
+		hover.appendMarkdown(mark.failed ? 'SCrunch: error on this line' : 'SCrunch');
+		return hover;
+	}
+	hover.appendMarkdown(`SCrunch  ${mark.failed ? 'failed' : 'passed'}\n\n`);
+	for (const test of mark.tests) {
+		const icon = test.state === 0 ? '$(testing-failed-icon)' : '$(testing-passed-icon)';
+		const duration = test.cached ? 'cached' : formatDuration(test.durationMs);
+		const expression = test.expression?.trim() || `line ${test.lineNumber + 1}`;
+		const args = encodeURIComponent(JSON.stringify([uri.toString(), test.lineNumber]));
+		const suffix = duration ? `  ${duration}` : '';
+		hover.appendMarkdown(`${icon} [${expression}](command:${showResultCommand}?${args})${suffix}\n\n`);
+	}
+	return hover;
+}
+
+function uriKeys(uri: string): string[] {
+	const keys = new Set<string>([uri]);
+	try {
+		const parsed = Uri.parse(uri);
+		keys.add(parsed.toString());
+		keys.add(parsed.fsPath);
+		keys.add(parsed.fsPath.toLowerCase());
+	} catch {
+	}
+	return [...keys];
 }
 
 export function registerDecorationLifecycle(context: ExtensionContext, decorations: DecorationController): void {

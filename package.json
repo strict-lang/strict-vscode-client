@@ -49,7 +49,11 @@
       },
       {
         "command": "strict-vscode-client.scrunch.focus",
-        "title": "SCrunch: Show Tests"
+        "title": "SCrunch: Show in Testing"
+      },
+      {
+        "command": "strict-vscode-client.scrunch.showLineTests",
+        "title": "SCrunch: Show Tests for Line"
       }
     ],
     "menus": {
@@ -70,6 +74,16 @@
           "command": "strict-vscode-client.run",
           "when": "resourceLangId == strict",
           "group": "navigation@2"
+        },
+        {
+          "command": "strict-vscode-client.scrunch.showLineTests",
+          "when": "resourceLangId == strict",
+          "group": "navigation@3"
+        },
+        {
+          "command": "strict-vscode-client.scrunch.focus",
+          "when": "resourceLangId == strict",
+          "group": "navigation@4"
         }
       ],
       "commandPalette": [
@@ -83,6 +97,10 @@
         },
         {
           "command": "strict-vscode-client.scrunch.focus"
+        },
+        {
+          "command": "strict-vscode-client.scrunch.showLineTests",
+          "when": "resourceLangId == strict"
         }
       ]
     },

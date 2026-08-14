@@ -7,10 +7,17 @@ export type DiscoveredMethod = {
 	name: string;
 	lineNumber: number;
 	tests: DiscoveredTest[];
+	implementation: DiscoveredTest[];
 };
 
 const memberPrefix = /^(has|constant|mutable|implement)\b/;
 const implementationStart = /^(for |if |return |constant |mutable )/;
+const memberIdentifier = /\b(value|other)\b/;
+
+export function typeNameFromPath(filePath: string): string {
+	const base = filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
+	return base.replace(/\.strict$/i, '');
+}
 
 export function discoverStrictTests(source: string): DiscoveredMethod[] {
 	const lines = source.split(/\r?\n/);
@@ -36,13 +43,17 @@ export function discoverStrictTests(source: string): DiscoveredMethod[] {
 			current = undefined;
 			continue;
 		}
-		current = { name: methodName(line), lineNumber, tests: [], body: [] };
+		current = { name: methodName(line), lineNumber, tests: [], implementation: [], body: [] };
 		methods.push(current);
 	}
 	for (const method of methods) {
 		method.tests = inferTests(method.body);
+		const testLines = new Set(method.tests.map((test) => test.lineNumber));
+		method.implementation = method.body.filter((line) => !testLines.has(line.lineNumber));
 	}
-	return methods.map(({ name, lineNumber, tests }) => ({ name, lineNumber, tests }));
+	return methods.map(({ name, lineNumber, tests, implementation }) => ({
+		name, lineNumber, tests, implementation
+	}));
 }
 
 function methodName(header: string): string {
@@ -53,13 +64,14 @@ function methodName(header: string): string {
 function inferTests(body: DiscoveredTest[]): DiscoveredTest[] {
 	const tests: DiscoveredTest[] = [];
 	for (const line of body) {
-		if (implementationStart.test(line.expression)) {
-			break;
-		}
-		if (/^(value|other)\b/.test(line.expression) && !/\bis\b/.test(line.expression)) {
+		if (implementationStart.test(line.expression) || isImplementationUsingMembers(line.expression)) {
 			break;
 		}
 		tests.push(line);
 	}
 	return tests;
+}
+
+function isImplementationUsingMembers(expression: string): boolean {
+	return memberIdentifier.test(expression) && !/\bis\b/.test(expression);
 }

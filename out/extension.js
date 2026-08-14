@@ -56,11 +56,11 @@ let clientCodeActions;
 async function activate(context) {
     output = vscode.window.createOutputChannel('Strict');
     decorations = new decorations_1.DecorationController(context.extensionPath);
-    scrunch = (0, scrunch_1.registerScrunch)();
+    scrunch = (0, scrunch_1.registerScrunch)(decorations);
     diagnosticHighlighter = new diagnostics_1.DiagnosticHighlighter();
     (0, decorations_1.registerDecorationLifecycle)(context, decorations);
     context.subscriptions.push(output, diagnosticHighlighter, scrunch);
-    context.subscriptions.push(vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)), vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)), vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => vscode.commands.executeCommand('workbench.view.testing.focus')), vscode.workspace.onDidChangeConfiguration((event) => {
+    context.subscriptions.push(vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)), vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)), vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => scrunch.showInTesting()), vscode.commands.registerCommand('strict-vscode-client.scrunch.showLineTests', () => scrunch.showLineTests()), vscode.commands.registerCommand(decorations_1.showResultCommand, (uri, lineNumber) => scrunch.showResult(uri, lineNumber)), vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('strict')) {
             void restartServer(context);
         }
@@ -122,7 +122,6 @@ async function startServer(context) {
         serverHandles = await (0, server_1.startLanguageClient)(launch, clientOptions, output);
         client = serverHandles.client;
         client.onNotification('testRunnerNotification', (message) => {
-            decorations.applyTestResult(message);
             scrunch.applyResult(message);
         });
         client.onNotification('valueEvaluationNotification', (message) => {

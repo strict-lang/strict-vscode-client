@@ -96,14 +96,34 @@ export function extractDiagnosticDetail(message: string): string {
 export function formatDiagnosticMessage(code: string | undefined, message: string): string {
 	const humanized = code ? humanizePascalCase(String(code)) : '';
 	const detail = extractDiagnosticDetail(message);
+	let body: string;
 	if (!humanized) {
-		return detail || message;
+		body = detail || message;
+	} else if (!detail || detail.toLowerCase() === humanized.toLowerCase()) {
+		body = humanized;
+	} else if (detail.toLowerCase().startsWith(`${humanized.toLowerCase()}:`)) {
+		body = detail;
+	} else {
+		body = `${humanized}: ${detail}`;
 	}
-	if (!detail || detail.toLowerCase() === humanized.toLowerCase()) {
-		return humanized;
+	const stack = extractStackText(message);
+	const hasReason = Boolean(detail && detail.toLowerCase() !== humanized.toLowerCase());
+	const executionFailed = /ExecutionFailed$/i.test(String(code ?? ''));
+	if (!stack || body.includes(stack) || (!hasReason && !executionFailed)) {
+		return body;
 	}
-	if (detail.toLowerCase().startsWith(`${humanized.toLowerCase()}:`)) {
-		return detail;
+	return `${body}\n${stack}`;
+}
+
+export function extractStackText(message: string): string {
+	if (!message) {
+		return '';
 	}
-	return `${humanized}: ${detail}`;
+	const frames: string[] = [];
+	const pattern = /at (.+?) in (.+):line (\d+)/g;
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(message)) !== null) {
+		frames.push(`at ${match[1].trim()} in ${match[2].trim()}:line ${match[3]}`);
+	}
+	return frames.join('\n');
 }

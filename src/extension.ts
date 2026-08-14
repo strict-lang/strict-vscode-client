@@ -8,6 +8,7 @@ import { registerCodeActionProvider } from './codeActions';
 import {
 	DecorationController,
 	registerDecorationLifecycle,
+	showResultCommand,
 	TestRunnerNotification,
 	ValueEvaluationNotification
 } from './decorations';
@@ -35,15 +36,18 @@ let clientCodeActions: vscode.Disposable | undefined;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
 	output = vscode.window.createOutputChannel('Strict');
 	decorations = new DecorationController(context.extensionPath);
-	scrunch = registerScrunch();
+	scrunch = registerScrunch(decorations);
 	diagnosticHighlighter = new DiagnosticHighlighter();
 	registerDecorationLifecycle(context, decorations);
 	context.subscriptions.push(output, diagnosticHighlighter, scrunch);
 	context.subscriptions.push(
 		vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)),
 		vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)),
-		vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () =>
-			vscode.commands.executeCommand('workbench.view.testing.focus')),
+		vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => scrunch.showInTesting()),
+		vscode.commands.registerCommand('strict-vscode-client.scrunch.showLineTests', () =>
+			scrunch.showLineTests()),
+		vscode.commands.registerCommand(showResultCommand, (uri: string, lineNumber: number) =>
+			scrunch.showResult(uri, lineNumber)),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration('strict')) {
 				void restartServer(context);
@@ -109,7 +113,6 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 		serverHandles = await startLanguageClient(launch, clientOptions, output);
 		client = serverHandles.client;
 		client.onNotification('testRunnerNotification', (message: TestRunnerNotification) => {
-			decorations.applyTestResult(message);
 			scrunch.applyResult(message);
 		});
 		client.onNotification('valueEvaluationNotification', (message: ValueEvaluationNotification) => {
