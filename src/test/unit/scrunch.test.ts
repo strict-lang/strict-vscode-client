@@ -1,8 +1,10 @@
 import * as assert from 'assert';
-import { isCacheFresh, siblingBinaryPath } from '../../scrunchCache';
+import { isCacheFresh, isStrictBinaryPath, siblingBinaryPath } from '../../scrunchCache';
 import { discoverStrictTests, typeNameFromPath } from '../../scrunchDiscover';
 import {
+	enrichNotification,
 	lineCoverageMarks,
+	methodForLine,
 	methodsWithTests
 } from '../../scrunchModel';
 import {
@@ -108,13 +110,56 @@ suite('scrunch discover', () => {
 		const visible = methodsWithTests(discoverStrictTests(source));
 		assert.deepStrictEqual(visible.map((method) => method.name), ['Greet']);
 	});
+
+	test('methodForLine maps a test line to its method, never a tests node', () => {
+		const methods = discoverStrictTests([
+			'has value Text',
+			'Greet Text',
+			'\tTextHelper("World").Greet is "Hello, World!"',
+			'\tTextHelper("Strict").Greet is "Hello, Strict!"',
+			'\t"Hello, " + value + "!"'
+		].join('\n'));
+		assert.strictEqual(methodForLine(methods, 2)?.name, 'Greet');
+		assert.strictEqual(methodForLine(methods, 3)?.name, 'Greet');
+		assert.strictEqual(methodForLine(methods, 1)?.name, 'Greet');
+		assert.strictEqual(methodForLine(methods, 0), undefined);
+	});
+
+	test('enrichNotification fills method from line when the server omits it', () => {
+		const methods = discoverStrictTests([
+			'Greet Text',
+			'\tTextHelper("World").Greet is "Hello, World!"',
+			'\t"Hello, " + value + "!"'
+		].join('\n'));
+		const enriched = enrichNotification({ lineNumber: 1, state: 1 }, methods, 'TextHelper');
+		assert.strictEqual(enriched.methodName, 'Greet');
+		assert.strictEqual(enriched.typeName, 'TextHelper');
+		assert.strictEqual(enriched.expression, 'TextHelper("World").Greet is "Hello, World!"');
+		assert.strictEqual(enriched.lineNumber, 1);
+		assert.notStrictEqual(enriched.methodName, 'tests');
+	});
+
+	test('enrichNotification accepts 1-based line numbers from the server', () => {
+		const methods = discoverStrictTests([
+			'Greet Text',
+			'\tTextHelper("World").Greet is "Hello, World!"',
+			'\t"Hello, " + value + "!"'
+		].join('\n'));
+		const enriched = enrichNotification({ lineNumber: 2, state: 1 }, methods, 'TextHelper');
+		assert.strictEqual(enriched.methodName, 'Greet');
+		assert.strictEqual(enriched.lineNumber, 1);
+		assert.strictEqual(enriched.expression, 'TextHelper("World").Greet is "Hello, World!"');
+	});
 });
 
 suite('scrunch format', () => {
-	test('formatDuration uses microseconds for sub-ms runs', () => {
+	test('formatDuration uses us below 100us and a single ms value at or above', () => {
 		assert.strictEqual(formatDuration(undefined), undefined);
+		assert.strictEqual(formatDuration(0), undefined);
 		assert.strictEqual(formatDuration(0.04), '40us');
-		assert.strictEqual(formatDuration(0.8), '800us');
+		assert.strictEqual(formatDuration(0.099), '99us');
+		assert.strictEqual(formatDuration(0.1), '0.1ms');
+		assert.strictEqual(formatDuration(0.8), '0.8ms');
 		assert.strictEqual(formatDuration(1.24), '1.2ms');
 		assert.strictEqual(formatDuration(18), '18ms');
 		assert.strictEqual(formatDuration(1500), '1.5s');
@@ -153,7 +198,7 @@ suite('scrunch format', () => {
 			methodName: 'not',
 			durationMs: 0.8
 		};
-		assert.ok(formatTestHover(message).includes('800us'));
+		assert.ok(formatTestHover(message).includes('0.8ms'));
 	});
 
 	test('formatSingleTestOutput is just that test and its result', () => {
@@ -274,5 +319,12 @@ suite('scrunch cache', () => {
 		assert.strictEqual(isCacheFresh(100, 99), false);
 		assert.strictEqual(isCacheFresh(100, 100), true);
 		assert.strictEqual(isCacheFresh(100, 150), true);
+	});
+
+	test('isStrictBinaryPath only matches .strictbinary', () => {
+		assert.strictEqual(isStrictBinaryPath('C:\\repo\\TextHelper.strictbinary'), true);
+		assert.strictEqual(isStrictBinaryPath('/tmp/Foo.STRICTBINARY'), true);
+		assert.strictEqual(isStrictBinaryPath('C:\\repo\\TextHelper.strict'), false);
+		assert.strictEqual(isStrictBinaryPath('C:\\repo\\strict-language-0.1.0.vsix'), false);
 	});
 });

@@ -18,6 +18,7 @@ import {
 	resolveLanguageServerLaunch,
 	resolveStrictCliLaunch
 } from './paths';
+import { isStrictBinaryPath } from './scrunchCache';
 import { registerScrunch, ScrunchController } from './scrunch';
 import { ServerHandles, startLanguageClient } from './server';
 
@@ -40,6 +41,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	diagnosticHighlighter = new DiagnosticHighlighter();
 	registerDecorationLifecycle(context, decorations);
 	context.subscriptions.push(output, diagnosticHighlighter, scrunch);
+	context.subscriptions.push(vscode.window.registerFileDecorationProvider({
+		provideFileDecoration(uri) {
+			if (!isStrictBinaryPath(uri.fsPath)) {
+				return undefined;
+			}
+			return {
+				color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground'),
+				tooltip: 'Cached compiled bytecode'
+			};
+		}
+	}));
 	context.subscriptions.push(
 		vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)),
 		vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)),

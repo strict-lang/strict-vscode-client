@@ -1,4 +1,4 @@
-import { DiscoveredMethod } from './scrunchDiscover';
+import { DiscoveredMethod, DiscoveredTest } from './scrunchDiscover';
 import { TestRunnerNotification } from './testResults';
 
 export type LineCoverageMark = {
@@ -9,6 +9,47 @@ export type LineCoverageMark = {
 
 export function methodsWithTests(methods: DiscoveredMethod[]): DiscoveredMethod[] {
 	return methods.filter((method) => method.tests.length > 0);
+}
+
+export function lineBelongsTo(method: DiscoveredMethod, lineNumber: number): boolean {
+	if (lineNumber === method.lineNumber) {
+		return true;
+	}
+	return method.tests.some((test) => test.lineNumber === lineNumber) ||
+		method.implementation.some((line) => line.lineNumber === lineNumber);
+}
+
+export function methodForLine(methods: DiscoveredMethod[], lineNumber: number): DiscoveredMethod | undefined {
+	const exact = methods.find((method) => lineBelongsTo(method, lineNumber));
+	if (exact) {
+		return exact;
+	}
+	if (lineNumber > 0) {
+		return methods.find((method) => lineBelongsTo(method, lineNumber - 1));
+	}
+	return undefined;
+}
+
+export function enrichNotification(
+	message: TestRunnerNotification,
+	methods: DiscoveredMethod[],
+	typeName: string
+): TestRunnerNotification {
+	const method = methodForLine(methods, message.lineNumber);
+	const test = method
+		? testAtLine(method, message.lineNumber) ?? testAtLine(method, message.lineNumber - 1)
+		: undefined;
+	return {
+		...message,
+		typeName: message.typeName || typeName,
+		methodName: message.methodName || method?.name,
+		expression: message.expression || test?.expression,
+		lineNumber: test?.lineNumber ?? message.lineNumber
+	};
+}
+
+function testAtLine(method: DiscoveredMethod, lineNumber: number): DiscoveredTest | undefined {
+	return method.tests.find((test) => test.lineNumber === lineNumber);
 }
 
 export function lineCoverageMarks(

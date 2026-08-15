@@ -41,6 +41,7 @@ const codeActions_1 = require("./codeActions");
 const decorations_1 = require("./decorations");
 const diagnostics_1 = require("./diagnostics");
 const paths_1 = require("./paths");
+const scrunchCache_1 = require("./scrunchCache");
 const scrunch_1 = require("./scrunch");
 const server_1 = require("./server");
 const runMethodCommand = 'strict-vscode-client.run';
@@ -60,6 +61,17 @@ async function activate(context) {
     diagnosticHighlighter = new diagnostics_1.DiagnosticHighlighter();
     (0, decorations_1.registerDecorationLifecycle)(context, decorations);
     context.subscriptions.push(output, diagnosticHighlighter, scrunch);
+    context.subscriptions.push(vscode.window.registerFileDecorationProvider({
+        provideFileDecoration(uri) {
+            if (!(0, scrunchCache_1.isStrictBinaryPath)(uri.fsPath)) {
+                return undefined;
+            }
+            return {
+                color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground'),
+                tooltip: 'Cached compiled bytecode'
+            };
+        }
+    }));
     context.subscriptions.push(vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)), vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)), vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => scrunch.showInTesting()), vscode.commands.registerCommand('strict-vscode-client.scrunch.showLineTests', () => scrunch.showLineTests()), vscode.commands.registerCommand(decorations_1.showResultCommand, (uri, lineNumber) => scrunch.showResult(uri, lineNumber)), vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('strict')) {
             void restartServer(context);

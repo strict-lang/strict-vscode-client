@@ -1,4 +1,3 @@
-import * as path from 'path';
 import {
 	commands,
 	Diagnostic,
@@ -15,6 +14,7 @@ import {
 	TestMessageStackFrame,
 	TestRunRequest,
 	tests,
+	TextEditorSelectionChangeKind,
 	Uri,
 	window,
 	workspace
@@ -22,7 +22,13 @@ import {
 import { DecorationController } from './decorations';
 import { isCacheFresh, siblingBinaryPath } from './scrunchCache';
 import { discoverStrictTests, DiscoveredMethod, typeNameFromPath } from './scrunchDiscover';
-import { lineCoverageMarks, methodsWithTests } from './scrunchModel';
+import {
+	enrichNotification,
+	lineBelongsTo,
+	lineCoverageMarks,
+	methodForLine,
+	methodsWithTests
+} from './scrunchModel';
 import {
 	formatDuration,
 	formatSingleTestOutput,
@@ -37,11 +43,11 @@ export class ScrunchController implements Disposable {
 	private readonly watchers: FileSystemWatcher[] = [];
 	private readonly results = new Map<string, Map<number, TestRunnerNotification>>();
 	private readonly methods = new Map<string, DiscoveredMethod[]>();
-	private readonly publishTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private publishTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly disposables: Disposable[] = [];
 
 	constructor(private readonly decorations: DecorationController) {
-		this.controller = tests.createTestController('strict.scrunch', 'SCrunch');
+		this.controller = tests.createTestController('strict.scrunch', 'Types');
 		this.controller.refreshHandler = () => this.discoverWorkspace();
 		this.disposables.push(this.controller);
 		this.watchers.push(workspace.createFileSystemWatcher('**/*.strict'));
@@ -64,22 +70,23 @@ export class ScrunchController implements Disposable {
 				}
 			}
 		}));
+		this.disposables.push(window.onDidChangeTextEditorSelection((event) => {
+			if (event.kind === TextEditorSelectionChangeKind.Command) {
+				void this.onRevealedFromTesting(event.textEditor.document.uri,
+					event.selections[0]?.active.line);
+			}
+		}));
 		void this.discoverWorkspace();
 	}
 
 	public onLanguageServerReady(): void {
-		for (const document of workspace.textDocuments) {
-			if (document.languageId === 'strict') {
-				this.queuePublish(document.uri);
-			}
-		}
+		this.queuePublish();
 	}
 
 	public dispose(): void {
-		for (const timer of this.publishTimers.values()) {
-			clearTimeout(timer);
+		if (this.publishTimer) {
+			clearTimeout(this.publishTimer);
 		}
-		this.publishTimers.clear();
 		for (const item of this.disposables) {
 			item.dispose();
 		}
@@ -90,19 +97,32 @@ export class ScrunchController implements Disposable {
 		if (!uri) {
 			return;
 		}
+		if (!this.methods.has(uri.toString())) {
+			void this.discoverFile(uri).then(() => this.storeResult(uri, message));
+			return;
+		}
+		this.storeResult(uri, message);
+	}
+
+	private storeResult(uri: Uri, message: TestRunnerNotification): void {
 		const key = uri.toString();
+		const enriched = enrichNotification(message, this.methods.get(key) ?? [],
+			typeNameFromPath(uri.fsPath));
+		if (!enriched.methodName) {
+			return;
+		}
+		const method = this.methodByName(uri, enriched.methodName);
+		if (!method || method.tests.length === 0) {
+			return;
+		}
 		let byLine = this.results.get(key);
 		if (!byLine) {
 			byLine = new Map();
 			this.results.set(key, byLine);
 		}
-		byLine.set(message.lineNumber, { ...message, cached: false, uri: key });
-		this.ensureMethodItem(uri, message.methodName || 'tests');
-		if (!this.methods.has(key)) {
-			void this.discoverFile(uri).then(() => this.queuePublish(uri));
-			return;
-		}
-		this.queuePublish(uri);
+		byLine.set(enriched.lineNumber, { ...enriched, cached: false, uri: key });
+		this.ensureMethodItem(uri, enriched.methodName);
+		this.queuePublish();
 	}
 
 	public async showInTesting(): Promise<void> {
@@ -132,30 +152,29 @@ export class ScrunchController implements Disposable {
 			await this.showTestsForLine(uri, lineNumber);
 			return;
 		}
-		this.publishSingle(uri, message);
+		this.publishAll();
+		await this.revealTest(uri, message.lineNumber);
 	}
 
 	private async showTestsForLine(uri: Uri, lineNumber: number): Promise<void> {
 		const mark = this.decorations.marksFor(uri.toString(), lineNumber);
 		const testsForLine = mark?.tests ?? [];
 		if (testsForLine.length === 0) {
-			const item = this.itemAt(uri, lineNumber);
-			if (item) {
-				await commands.executeCommand('vscode.revealTestInExplorer', item);
-			}
-			await commands.executeCommand('workbench.view.testing.focus');
+			await this.revealTest(uri, lineNumber);
 			return;
 		}
 		if (testsForLine.length === 1) {
-			this.publishSingle(uri, testsForLine[0]);
+			this.publishAll();
+			await this.revealTest(uri, testsForLine[0].lineNumber);
 			return;
 		}
 		const picked = await window.showQuickPick(testsForLine.map((test) => testPick(test)), {
-			title: 'SCrunch tests for this line',
+			title: 'Tests for this line',
 			placeHolder: 'Show test result'
 		});
 		if (picked) {
-			this.publishSingle(uri, picked.test);
+			this.publishAll();
+			await this.revealTest(uri, picked.test.lineNumber);
 		}
 	}
 
@@ -195,7 +214,8 @@ export class ScrunchController implements Disposable {
 		fileItem.children.replace([]);
 		for (const method of visible) {
 			const methodItem = this.ensureChild(fileItem, methodId(uri, method.name), method.name, uri);
-			methodItem.range = new Range(method.lineNumber, 0, method.lineNumber, 0);
+			const target = method.tests[0]?.lineNumber ?? method.lineNumber;
+			methodItem.range = new Range(target, 0, target, 0);
 			methodItem.children.replace([]);
 		}
 		if (await this.hasFreshBinary(uri)) {
@@ -231,9 +251,11 @@ export class ScrunchController implements Disposable {
 		this.results.delete(uri.toString());
 		const fileItem = this.findFileItem(uri);
 		if (fileItem) {
+			fileItem.label = typeNameFromPath(uri.fsPath);
 			fileItem.description = undefined;
 			fileItem.error = undefined;
 			fileItem.children.forEach((child) => {
+				child.label = methodNameFromItem(child);
 				child.description = undefined;
 				child.error = undefined;
 			});
@@ -250,7 +272,6 @@ export class ScrunchController implements Disposable {
 		for (const method of methodsWithTests(discovered)) {
 			const methodItem = fileItem.children.get(methodId(uri, method.name));
 			if (methodItem) {
-				methodItem.description = 'cached';
 				methodItem.error = undefined;
 			}
 			for (const test of method.tests) {
@@ -266,9 +287,8 @@ export class ScrunchController implements Disposable {
 			}
 		}
 		this.results.set(uri.toString(), byLine);
-		fileItem.description = 'cached';
 		fileItem.error = undefined;
-		this.publishFile(uri);
+		this.queuePublish();
 	}
 
 	private async hasFreshBinary(uri: Uri): Promise<boolean> {
@@ -305,7 +325,7 @@ export class ScrunchController implements Disposable {
 		fileItem.error = errors.map((item) => item.message).join('\n');
 		const errorLines = new Set(errors.map((item) => item.range.start.line));
 		fileItem.children.forEach((methodItem) => {
-			const method = this.methodByName(uri, methodItem.label);
+			const method = this.methodByName(uri, methodNameFromItem(methodItem));
 			if (!method) {
 				return;
 			}
@@ -318,14 +338,7 @@ export class ScrunchController implements Disposable {
 	private removeFile(uri: Uri): void {
 		this.results.delete(uri.toString());
 		this.methods.delete(uri.toString());
-		const fileItem = this.findFileItem(uri);
-		if (!fileItem) {
-			return;
-		}
-		fileItem.parent?.children.delete(fileItem.id);
-		if (fileItem.parent && fileItem.parent.children.size === 0 && fileItem.parent.parent) {
-			fileItem.parent.parent.children.delete(fileItem.parent.id);
-		}
+		this.controller.items.delete(`file:${uri.toString()}`);
 	}
 
 	private removeFileIfEmpty(uri: Uri): void {
@@ -338,74 +351,60 @@ export class ScrunchController implements Disposable {
 		}
 	}
 
-	private queuePublish(uri: Uri): void {
-		const key = uri.toString();
-		const existing = this.publishTimers.get(key);
-		if (existing) {
-			clearTimeout(existing);
+	private queuePublish(): void {
+		if (this.publishTimer) {
+			clearTimeout(this.publishTimer);
 		}
-		this.publishTimers.set(key, setTimeout(() => this.publishFile(uri), 40));
+		this.publishTimer = setTimeout(() => this.publishAll(), 40);
 	}
 
-	private publishFile(uri: Uri): void {
-		const key = uri.toString();
-		this.publishTimers.delete(key);
-		this.refreshCoverage(uri);
-		const byLine = this.results.get(key);
-		if (!byLine || byLine.size === 0) {
-			return;
+	private publishAll(): void {
+		this.publishTimer = undefined;
+		for (const key of this.methods.keys()) {
+			const uri = this.parseUri(key);
+			if (uri) {
+				this.refreshCoverage(uri);
+			}
 		}
-		const fileItem = this.findFileItem(uri);
-		if (!fileItem) {
-			return;
-		}
-		const run = this.controller.createTestRun(new TestRunRequest(), 'SCrunch', false);
-		const methodDurations = new Map<string, { duration: number; failed: boolean; cached: boolean }>();
-		for (const message of byLine.values()) {
-			const name = message.methodName || 'tests';
-			const current = methodDurations.get(name);
-			const duration = message.durationMs ?? 0;
-			if (!current) {
-				methodDurations.set(name, {
-					duration, failed: message.state === 0, cached: Boolean(message.cached)
-				});
+		const run = this.controller.createTestRun(new TestRunRequest(), 'Types', false);
+		for (const [key, byLine] of this.results) {
+			const uri = this.parseUri(key);
+			if (!uri || byLine.size === 0) {
 				continue;
 			}
-			current.duration += duration;
-			current.failed = current.failed || message.state === 0;
-			current.cached = current.cached && Boolean(message.cached);
-		}
-		for (const [methodName, summary] of methodDurations) {
-			const methodItem = this.ensureMethodItem(uri, methodName);
-			methodItem.description = summary.cached ? 'cached' : formatDuration(summary.duration);
-			if (summary.failed || methodItem.error) {
-				const failed = [...byLine.values()].filter((item) =>
-					item.methodName === methodName && item.state === 0);
-				const messages = failed.length > 0
-					? failed.map((item) => this.toMessage(uri, item))
-					: [new TestMessage(String(methodItem.error))];
-				run.failed(methodItem, messages, summary.duration);
-			} else {
-				run.passed(methodItem, summary.duration);
+			const fileItem = this.findFileItem(uri);
+			if (!fileItem) {
+				continue;
 			}
+			this.dropUnknownMethods(uri, fileItem);
+			const visible = new Set(methodsWithTests(this.methods.get(key) ?? []).
+				map((method) => method.name));
+			const grouped = groupByMethod(byLine);
+			for (const [methodName, summary] of grouped) {
+				if (!visible.has(methodName)) {
+					continue;
+				}
+				const methodItem = this.ensureMethodItem(uri, methodName);
+				const duration = methodDescription(summary);
+				methodItem.label = duration ? `${methodName}  ${duration}` : methodName;
+				methodItem.description = undefined;
+				for (const message of summary.messages) {
+					run.appendOutput(formatSingleTestOutput(message).replace(/\n/g, '\r\n') + '\r\n',
+						new Location(uri, new Position(message.lineNumber, 0)), methodItem);
+				}
+				if (summary.failed || methodItem.error) {
+					const failed = summary.messages.filter((item) => item.state === 0);
+					const messages = failed.length > 0
+						? failed.map((item) => this.toMessage(uri, item))
+						: [new TestMessage(String(methodItem.error))];
+					run.failed(methodItem, messages);
+				} else {
+					run.passed(methodItem);
+				}
+			}
+			this.updateTypeDuration(fileItem);
 		}
-		this.updateFolderDurations(fileItem);
 		run.end();
-	}
-
-	private publishSingle(uri: Uri, message: TestRunnerNotification): void {
-		const item = this.ensureMethodItem(uri, message.methodName || 'tests');
-		const run = this.controller.createTestRun(new TestRunRequest([item]), 'SCrunch', true);
-		const duration = message.durationMs ?? 0;
-		run.appendOutput(formatSingleTestOutput(message).replace(/\n/g, '\r\n') + '\r\n',
-			new Location(uri, new Position(message.lineNumber, 0)), item);
-		if (message.state === 0) {
-			run.failed(item, this.toMessage(uri, message), duration);
-		} else {
-			run.passed(item, duration);
-		}
-		run.end();
-		void commands.executeCommand('workbench.panel.testResults.view.focus');
 	}
 
 	private refreshCoverage(uri: Uri): void {
@@ -443,57 +442,72 @@ export class ScrunchController implements Disposable {
 		const methodItem = this.ensureChild(fileItem, methodId(uri, methodName), methodName, uri);
 		const method = this.methodByName(uri, methodName);
 		if (method) {
-			methodItem.range = new Range(method.lineNumber, 0, method.lineNumber, 0);
+			const target = method.tests[0]?.lineNumber ?? method.lineNumber;
+			methodItem.range = new Range(target, 0, target, 0);
 		}
 		methodItem.children.replace([]);
 		return methodItem;
 	}
 
 	private ensureFileItem(uri: Uri): TestItem {
-		const parts = relativeParts(uri);
-		let parentCollection = this.controller.items;
-		if (parts.folders.length > 0) {
-			for (let index = 0; index < parts.folders.length; index++) {
-				const folderUri = Uri.joinPath(parts.workspace, ...parts.folders.slice(0, index + 1));
-				const id = `folder:${folderUri.toString()}`;
-				let folder = parentCollection.get(id);
-				if (!folder) {
-					folder = this.controller.createTestItem(id, parts.folders[index], folderUri);
-					folder.canResolveChildren = true;
-					parentCollection.add(folder);
-				}
-				parentCollection = folder.children;
-			}
-		}
 		const fileId = `file:${uri.toString()}`;
-		let fileItem = parentCollection.get(fileId);
+		let fileItem = this.controller.items.get(fileId);
 		const label = typeNameFromPath(uri.fsPath);
 		if (!fileItem) {
 			fileItem = this.controller.createTestItem(fileId, label, uri);
-			parentCollection.add(fileItem);
+			this.controller.items.add(fileItem);
 		} else {
 			fileItem.label = label;
 		}
 		fileItem.sortText = label;
+		fileItem.range = new Range(0, 0, 0, 0);
 		return fileItem;
 	}
 
 	private findFileItem(uri: Uri): TestItem | undefined {
-		const search = (collection: { forEach(callback: (item: TestItem) => void): void }): TestItem | undefined => {
-			let found: TestItem | undefined;
-			collection.forEach((item) => {
-				if (found) {
-					return;
-				}
-				if (item.id === `file:${uri.toString()}`) {
-					found = item;
-					return;
-				}
-				found = search(item.children);
-			});
-			return found;
-		};
-		return search(this.controller.items);
+		return this.controller.items.get(`file:${uri.toString()}`);
+	}
+
+	private dropUnknownMethods(uri: Uri, fileItem: TestItem): void {
+		const visible = new Set(methodsWithTests(this.methods.get(uri.toString()) ?? []).
+			map((method) => method.name));
+		const stale: string[] = [];
+		fileItem.children.forEach((child) => {
+			if (!visible.has(methodNameFromItem(child))) {
+				stale.push(child.id);
+			}
+		});
+		for (const id of stale) {
+			fileItem.children.delete(id);
+		}
+	}
+
+	private async revealTest(uri: Uri, lineNumber: number): Promise<void> {
+		const item = this.itemAt(uri, lineNumber);
+		await window.showTextDocument(uri, {
+			selection: new Range(lineNumber, 0, lineNumber, 0),
+			preserveFocus: false
+		});
+		if (item) {
+			await commands.executeCommand('vscode.revealTestInExplorer', item);
+		}
+		await commands.executeCommand('workbench.panel.testResults.view.focus');
+	}
+
+	private async onRevealedFromTesting(uri: Uri, lineNumber: number | undefined): Promise<void> {
+		if (lineNumber === undefined || !uri.fsPath.toLowerCase().endsWith('.strict')) {
+			return;
+		}
+		const method = methodForLine(this.methods.get(uri.toString()) ?? [], lineNumber);
+		if (!method) {
+			return;
+		}
+		const onMethodOrTest = lineNumber === method.lineNumber ||
+			method.tests.some((test) => test.lineNumber === lineNumber);
+		if (!onMethodOrTest) {
+			return;
+		}
+		await commands.executeCommand('workbench.panel.testResults.view.focus');
 	}
 
 	private itemAt(uri: Uri, lineNumber: number): TestItem | undefined {
@@ -503,7 +517,7 @@ export class ScrunchController implements Disposable {
 		}
 		let match: TestItem | undefined;
 		fileItem.children.forEach((child) => {
-			const method = this.methodByName(uri, child.label);
+			const method = this.methodByName(uri, methodNameFromItem(child));
 			if (method && lineBelongsTo(method, lineNumber)) {
 				match = child;
 			}
@@ -526,25 +540,30 @@ export class ScrunchController implements Disposable {
 		return item;
 	}
 
-	private updateFolderDurations(item: TestItem): void {
-		let current: TestItem | undefined = item;
-		while (current) {
-			if (current.id.startsWith('file:') || current.id.startsWith('folder:')) {
-				let total = 0;
-				let counted = 0;
-				current.children.forEach((child) => {
-					const ms = parseDurationMs(child.description);
-					if (ms !== undefined) {
-						total += ms;
-						counted += 1;
-					}
-				});
-				if (counted > 0) {
-					current.description = formatDuration(total);
-				}
+	private updateTypeDuration(item: TestItem): void {
+		const typeName = item.uri ? typeNameFromPath(item.uri.fsPath) : item.label;
+		let total = 0;
+		let counted = 0;
+		let cached = 0;
+		item.children.forEach((child) => {
+			const duration = durationFromLabel(child.label);
+			if (duration === 'cached') {
+				cached += 1;
+				return;
 			}
-			current = current.parent;
+			const ms = parseDurationMs(duration);
+			if (ms !== undefined) {
+				total += ms;
+				counted += 1;
+			}
+		});
+		item.description = undefined;
+		if (counted > 0) {
+			const text = formatDuration(total);
+			item.label = text ? `${typeName}  ${text}` : typeName;
+			return;
 		}
+		item.label = cached > 0 ? `${typeName}  cached` : typeName;
 	}
 
 	private parseUri(value: string | undefined): Uri | undefined {
@@ -580,22 +599,58 @@ function methodId(uri: Uri, methodName: string): string {
 	return `method:${uri.toString()}#${methodName}`;
 }
 
-function relativeParts(uri: Uri): { workspace: Uri; folders: string[] } {
-	const folder = workspace.getWorkspaceFolder(uri);
-	const workspaceUri = folder?.uri ?? Uri.file(path.dirname(uri.fsPath));
-	const relative = path.relative(workspaceUri.fsPath, path.dirname(uri.fsPath));
-	const folders = relative && relative !== '.'
-		? relative.split(/[\\/]/).filter((part) => part.length > 0)
-		: [];
-	return { workspace: workspaceUri, folders };
+function methodNameFromItem(item: TestItem): string {
+	const separator = item.id.lastIndexOf('#');
+	return separator >= 0 ? item.id.slice(separator + 1) : item.label;
 }
 
-function lineBelongsTo(method: DiscoveredMethod, lineNumber: number): boolean {
-	if (lineNumber === method.lineNumber) {
-		return true;
+function durationFromLabel(label: string): string | undefined {
+	const separator = label.lastIndexOf('  ');
+	return separator >= 0 ? label.slice(separator + 2) : undefined;
+}
+
+type MethodSummary = {
+	duration: number;
+	hasDuration: boolean;
+	failed: boolean;
+	cached: boolean;
+	messages: TestRunnerNotification[];
+};
+
+function groupByMethod(byLine: Map<number, TestRunnerNotification>): Map<string, MethodSummary> {
+	const grouped = new Map<string, MethodSummary>();
+	for (const message of byLine.values()) {
+		if (!message.methodName) {
+			continue;
+		}
+		const current = grouped.get(message.methodName);
+		const hasDuration = message.durationMs !== undefined && message.durationMs > 0;
+		if (!current) {
+			grouped.set(message.methodName, {
+				duration: hasDuration ? message.durationMs ?? 0 : 0,
+				hasDuration,
+				failed: message.state === 0,
+				cached: Boolean(message.cached),
+				messages: [message]
+			});
+			continue;
+		}
+		if (hasDuration) {
+			current.duration += message.durationMs ?? 0;
+			current.hasDuration = true;
+		}
+		current.failed = current.failed || message.state === 0;
+		current.cached = current.cached && Boolean(message.cached);
+		current.messages.push(message);
 	}
-	return method.tests.some((test) => test.lineNumber === lineNumber) ||
-		method.implementation.some((line) => line.lineNumber === lineNumber);
+	return grouped;
+}
+
+function methodDescription(summary: MethodSummary): string | undefined {
+	if (summary.cached && !summary.failed) {
+		return 'cached';
+	}
+	return formatDuration(summary.hasDuration ? summary.duration : undefined);
 }
 
 function testPick(test: TestRunnerNotification): QuickPickItem & { test: TestRunnerNotification } {

@@ -1,5 +1,9 @@
 export const strictBinaryExtension = '.strictbinary';
 
+export function isStrictBinaryPath(filePath: string): boolean {
+	return filePath.toLowerCase().endsWith(strictBinaryExtension);
+}
+
 export function siblingBinaryPath(strictPath: string): string {
 	return strictPath.replace(/\.strict$/i, strictBinaryExtension);
 }

@@ -19,10 +19,10 @@ export type StackFrame = {
 };
 
 export function formatDuration(durationMs: number | undefined): string | undefined {
-	if (durationMs === undefined || Number.isNaN(durationMs)) {
+	if (durationMs === undefined || Number.isNaN(durationMs) || durationMs <= 0) {
 		return undefined;
 	}
-	if (durationMs < 1) {
+	if (durationMs < 0.1) {
 		return `${Math.max(1, Math.round(durationMs * 1000))}us`;
 	}
 	if (durationMs < 10) {
