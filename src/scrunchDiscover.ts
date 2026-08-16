@@ -8,6 +8,7 @@ export type DiscoveredMethod = {
 	lineNumber: number;
 	tests: DiscoveredTest[];
 	implementation: DiscoveredTest[];
+	runnable: boolean;
 };
 
 const memberPrefix = /^(has|constant|mutable|implement)\b/;
@@ -43,7 +44,10 @@ export function discoverStrictTests(source: string): DiscoveredMethod[] {
 			current = undefined;
 			continue;
 		}
-		current = { name: methodName(line), lineNumber, tests: [], implementation: [], body: [] };
+		current = {
+			name: methodName(line), lineNumber, tests: [], implementation: [], body: [],
+			runnable: isRunnableHeader(line)
+		};
 		methods.push(current);
 	}
 	for (const method of methods) {
@@ -51,9 +55,22 @@ export function discoverStrictTests(source: string): DiscoveredMethod[] {
 		const testLines = new Set(method.tests.map((test) => test.lineNumber));
 		method.implementation = method.body.filter((line) => !testLines.has(line.lineNumber));
 	}
-	return methods.map(({ name, lineNumber, tests, implementation }) => ({
-		name, lineNumber, tests, implementation
+	return methods.map(({ name, lineNumber, tests, implementation, runnable }) => ({
+		name, lineNumber, tests, implementation, runnable
 	}));
+}
+
+export function isRunnableHeader(header: string): boolean {
+	const open = header.indexOf('(');
+	if (open < 0) {
+		return true;
+	}
+	const close = header.lastIndexOf(')');
+	const inside = header.slice(open + 1, close >= 0 ? close : undefined).trim();
+	if (inside.length === 0) {
+		return true;
+	}
+	return inside.split(',').every((part) => part.includes('='));
 }
 
 function methodName(header: string): string {

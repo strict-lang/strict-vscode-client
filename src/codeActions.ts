@@ -9,6 +9,7 @@ import {
 	WorkspaceEdit
 } from 'vscode';
 import { diagnosticCode } from './diagnostics';
+import { strictDocumentSelector } from './paths';
 
 export const strictCodeActionProvider: CodeActionProvider = {
 	provideCodeActions(document, _range, context) {
@@ -129,7 +130,7 @@ function fixLeadingWhitespaceAction(
 }
 
 export function registerCodeActionProvider(): ReturnType<typeof languages.registerCodeActionsProvider> {
-	return languages.registerCodeActionsProvider({ language: 'strict' }, strictCodeActionProvider, {
+	return languages.registerCodeActionsProvider(strictDocumentSelector, strictCodeActionProvider, {
 		providedCodeActionKinds: [CodeActionKind.QuickFix]
 	});
 }

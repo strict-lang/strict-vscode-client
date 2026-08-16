@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import {
 	CancellationStrategy,
+	ExecuteCommandRequest,
 	LanguageClient,
 	LanguageClientOptions
 } from 'vscode-languageclient/node';
@@ -16,7 +17,8 @@ import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
 import {
 	buildRunFileArgs,
 	resolveLanguageServerLaunch,
-	resolveStrictCliLaunch
+	resolveStrictCliLaunch,
+	strictDocumentSelector
 } from './paths';
 import { isStrictBinaryPath } from './scrunchCache';
 import { registerScrunch, ScrunchController } from './scrunch';
@@ -89,10 +91,7 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 		return;
 	}
 	const clientOptions: LanguageClientOptions = {
-		documentSelector: [
-			{ language: 'strict' },
-			{ pattern: '**/*.strict' }
-		],
+		documentSelector: strictDocumentSelector,
 		progressOnInitialization: true,
 		outputChannel: output,
 		connectionOptions: {
@@ -108,11 +107,13 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 				if (command !== runMethodCommand) {
 					return next(command, args);
 				}
-				const methodCall = await promptForMethodCall();
+				const provided = readMethodLabel(args);
+				const methodCall = provided ?? await promptForMethodCall();
 				if (!methodCall) {
 					return undefined;
 				}
-				const documentUri = vscode.window.activeTextEditor?.document.uri.toString();
+				const documentUri = readDocumentUri(args) ??
+					vscode.window.activeTextEditor?.document.uri.toString();
 				if (!documentUri) {
 					void vscode.window.showErrorMessage('Open a .strict file before running a method.');
 					return undefined;
@@ -132,6 +133,13 @@ async function startServer(context: vscode.ExtensionContext): Promise<void> {
 		});
 		registerClientCodeActionsIfNeeded(context);
 		output.appendLine(`Strict language server started via ${launch.displayName}`);
+		scrunch.setRunner(async (uri, methodName) => {
+			output.appendLine(`SCrunch running ${methodName} in ${uri.fsPath}`);
+			await client!.sendRequest(ExecuteCommandRequest.type, {
+				command: runMethodCommand,
+				arguments: [{ label: methodName }, uri.toString()]
+			});
+		});
 		scrunch.onLanguageServerReady();
 	} catch (error) {
 		const text = error instanceof Error ? error.message : String(error);
@@ -169,10 +177,17 @@ function disposeClientCodeActions(): void {
 }
 
 async function stopServer(): Promise<void> {
-	if (serverHandles) {
-		await serverHandles.stop();
-		serverHandles = undefined;
-		client = undefined;
+	const handles = serverHandles;
+	serverHandles = undefined;
+	client = undefined;
+	if (!handles) {
+		return;
+	}
+	try {
+		await handles.stop();
+	} catch (error) {
+		const text = error instanceof Error ? error.message : String(error);
+		output.appendLine(`Error stopping language server: ${text}`);
 	}
 }
 
@@ -180,6 +195,22 @@ async function restartServer(context: vscode.ExtensionContext): Promise<void> {
 	output.appendLine('Restarting Strict language server...');
 	await stopServer();
 	await startServer(context);
+}
+
+function readMethodLabel(args: unknown[] | undefined): string | undefined {
+	const first = args?.[0];
+	if (first && typeof first === 'object' && 'label' in first) {
+		const label = (first as { label?: unknown }).label;
+		if (typeof label === 'string' && label.trim().length > 0) {
+			return label.trim();
+		}
+	}
+	return undefined;
+}
+
+function readDocumentUri(args: unknown[] | undefined): string | undefined {
+	const second = args?.[1];
+	return typeof second === 'string' && second.length > 0 ? second : undefined;
 }
 
 async function promptForMethodCall(): Promise<string | undefined> {

@@ -7,8 +7,11 @@ import {
 	candidateFiles,
 	findOnPath,
 	launchFromPath,
+	newestExistingFile,
+	normalizeFsPath,
 	resolveLanguageServerLaunch,
-	resolveStrictCliLaunch
+	resolveStrictCliLaunch,
+	strictDocumentSelector
 } from '../../paths';
 
 suite('paths', () => {
@@ -92,5 +95,29 @@ suite('paths', () => {
 		const found = findOnPath(['Strict.LanguageServer'], bin);
 		assert.ok(found);
 		assert.strictEqual(path.normalize(found!), path.normalize(exePath));
+	});
+
+	test('newestExistingFile picks the later write', () => {
+		const older = path.join(tempRoot, 'old.dll');
+		const newer = path.join(tempRoot, 'new.dll');
+		fs.writeFileSync(older, '');
+		const then = Date.now() - 60_000;
+		fs.utimesSync(older, then / 1000, then / 1000);
+		fs.writeFileSync(newer, '');
+		assert.strictEqual(newestExistingFile([older, newer]), newer);
+	});
+
+	test('normalizeFsPath matches the same file across slash and case differences', () => {
+		assert.strictEqual(
+			normalizeFsPath('C:\\repo\\BaseTypesTest.strict'),
+			normalizeFsPath('c:/repo/BaseTypesTest.strict')
+		);
+	});
+
+	test('document selector always includes a scheme', () => {
+		assert.ok(strictDocumentSelector.length > 0);
+		for (const selector of strictDocumentSelector) {
+			assert.ok(selector.scheme, JSON.stringify(selector));
+		}
 	});
 });

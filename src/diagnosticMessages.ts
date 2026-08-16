@@ -97,7 +97,9 @@ export function formatDiagnosticMessage(code: string | undefined, message: strin
 	const humanized = code ? humanizePascalCase(String(code)) : '';
 	const detail = extractDiagnosticDetail(message);
 	let body: string;
-	if (!humanized) {
+	if (code === 'InterpreterExecutionFailed' || code === 'TestFailed') {
+		body = detail || message;
+	} else if (!humanized) {
 		body = detail || message;
 	} else if (!detail || detail.toLowerCase() === humanized.toLowerCase()) {
 		body = humanized;

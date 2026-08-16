@@ -1,30 +1,37 @@
 import * as assert from 'assert';
-import { formatTestHover, TestRunnerNotification } from '../../testResults';
+import { formatCoverageHover, formatInlineFailure, LineCoverageMark } from '../../scrunchModel';
 
 suite('decorations', () => {
-	test('formatTestHover describes a passing test', () => {
-		const message: TestRunnerNotification = {
-			lineNumber: 1,
-			state: 1,
-			expression: 'not true is false',
-			methodName: 'not'
+	test('coverage hover is duration, not a run-tests prompt', () => {
+		const mark: LineCoverageMark = {
+			lineNumber: 2,
+			failed: false,
+			kind: 'coverage',
+			tests: [],
+			durationMs: 0.04
 		};
-		assert.strictEqual(formatTestHover(message), 'Passed `not true is false`\nnot');
+		const hover = formatCoverageHover(mark);
+		assert.strictEqual(hover, '40us');
+		assert.ok(!hover.includes('Click to run'));
+		assert.ok(!hover.includes('right click'));
 	});
 
-	test('formatTestHover includes caller and failure details', () => {
-		const message: TestRunnerNotification = {
-			lineNumber: 6,
-			state: 0,
-			expression: 'true and false is false',
-			methodName: 'and',
-			message: '"and" method failed: true and false is false, result: false',
-			details: 'false is false'
-		};
-		const hover = formatTestHover(message);
-		assert.ok(hover.includes('Failed `true and false is false`'));
-		assert.ok(hover.includes('and'));
-		assert.ok(hover.includes('false is false'));
-		assert.ok(hover.includes('"and" method failed'));
+	test('failed status hover shows the human error, not a type path', () => {
+		const hover = formatCoverageHover({
+			lineNumber: 1,
+			failed: true,
+			kind: 'status',
+			tests: [],
+			message: 'Cannot call body on trait method: TextWriter.Write is a trait method and has no implementation'
+		});
+		assert.ok(hover.includes('Cannot call body on trait method'));
+		assert.ok(!hover.includes('Click to run'));
+	});
+
+	test('inline failure is only the discrepancy', () => {
+		assert.strictEqual(formatInlineFailure({
+			expected: '"Hello, yo!"',
+			actual: '"Hello"'
+		}), 'expected "Hello, yo!"  got "Hello"');
 	});
 });

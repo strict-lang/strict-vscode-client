@@ -4,6 +4,15 @@ import * as path from 'path';
 export const languageServerPipeName = 'Strict.LanguageServer';
 export const languageServerPipePath = '\\\\.\\pipe\\Strict.LanguageServer';
 
+export function normalizeFsPath(filePath: string): string {
+	return filePath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+export const strictDocumentSelector = [
+	{ language: 'strict', scheme: 'file' },
+	{ language: 'strict', scheme: 'untitled' }
+];
+
 export type LaunchTarget = {
 	command: string;
 	args: string[];
@@ -153,10 +162,14 @@ export function resolveLaunchTarget(options: ResolveOptions): LaunchTarget | und
 	}
 	const dllNames = options.dllNames ?? [];
 	const searchRoots = options.searchRoots ?? [];
-	for (const candidate of candidateFiles(searchRoots, dllRelativePaths(dllNames))) {
+	const candidates = candidateFiles(searchRoots, dllRelativePaths(dllNames));
+	const newestDll = newestExistingFile(candidates.filter((candidate) => candidate.endsWith('.dll')));
+	if (newestDll) {
+		return launchFromPath(newestDll, dotnetPath);
+	}
+	for (const candidate of candidates) {
 		const launch = launchFromPath(candidate, dotnetPath);
 		if (launch) {
-			// Prefer already-built dll over csproj when both exist; dllRelativePaths lists dll first.
 			if (candidate.endsWith('.csproj')) {
 				const built = preferBuiltDll(candidate, dotnetPath);
 				return built ?? {
@@ -181,16 +194,31 @@ function preferBuiltDll(csprojPath: string, dotnetPath: string): LaunchTarget | 
 	const projectDir = path.dirname(path.resolve(csprojPath));
 	const projectName = path.basename(csprojPath, '.csproj');
 	const dllName = projectName + '.dll';
+	const dlls: string[] = [];
 	for (const config of ['Release', 'Debug']) {
 		for (const framework of ['net10.0', 'net9.0', 'net8.0']) {
-			const dllPath = path.join(projectDir, 'bin', config, framework, dllName);
-			const launch = launchFromPath(dllPath, dotnetPath);
-			if (launch) {
-				return launch;
-			}
+			dlls.push(path.join(projectDir, 'bin', config, framework, dllName));
 		}
 	}
-	return undefined;
+	const newest = newestExistingFile(dlls);
+	return newest ? launchFromPath(newest, dotnetPath) : undefined;
+}
+
+export function newestExistingFile(paths: string[]): string | undefined {
+	let best: { filePath: string; mtime: number } | undefined;
+	for (const filePath of paths) {
+		try {
+			const stat = fs.statSync(filePath);
+			if (!stat.isFile()) {
+				continue;
+			}
+			if (!best || stat.mtimeMs > best.mtime) {
+				best = { filePath, mtime: stat.mtimeMs };
+			}
+		} catch {
+		}
+	}
+	return best?.filePath;
 }
 
 export function defaultSearchRoots(workspaceFolders: string[] = [], extensionPath?: string): string[] {

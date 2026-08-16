@@ -1,18 +1,24 @@
 import * as assert from 'assert';
 import { isCacheFresh, isStrictBinaryPath, siblingBinaryPath } from '../../scrunchCache';
-import { discoverStrictTests, typeNameFromPath } from '../../scrunchDiscover';
+import { discoverStrictTests, isRunnableHeader, typeNameFromPath } from '../../scrunchDiscover';
 import {
 	enrichNotification,
+	formatCoverageHover,
+	formatInlineFailure,
+	isManualMethod,
 	lineCoverageMarks,
 	methodForLine,
-	methodsWithTests
+	methodsWithTests,
+	shouldExecuteManual,
+	shouldShowInlineValue,
+	visibleMethods
 } from '../../scrunchModel';
 import {
 	formatDuration,
+	formatErrorSummary,
 	formatFailureOutput,
-	formatLineTests,
-	formatSingleTestOutput,
-	formatTestHover,
+	formatMethodOutput,
+	parseDiscrepancy,
 	parseStackFrames,
 	TestRunnerNotification
 } from '../../testResults';
@@ -107,8 +113,35 @@ suite('scrunch discover', () => {
 			'\tTextHelper("World").Greet is "Hello, World!"',
 			'\t"Hello, " + value + "!"'
 		].join('\n');
-		const visible = methodsWithTests(discoverStrictTests(source));
-		assert.deepStrictEqual(visible.map((method) => method.name), ['Greet']);
+		const methods = discoverStrictTests(source);
+		assert.deepStrictEqual(methodsWithTests(methods).map((method) => method.name), ['Greet']);
+		assert.deepStrictEqual(visibleMethods(methods).map((method) => method.name), ['Run', 'Greet']);
+		assert.strictEqual(methods.find((method) => method.name === 'Run')?.runnable, true);
+		assert.strictEqual(methods.find((method) => method.name === 'Greet')?.runnable, true);
+	});
+
+	test('isRunnableHeader treats missing or defaulted parameters as runnable', () => {
+		assert.strictEqual(isRunnableHeader('Run'), true);
+		assert.strictEqual(isRunnableHeader('Greet Text'), true);
+		assert.strictEqual(isRunnableHeader('Run()'), true);
+		assert.strictEqual(isRunnableHeader('Run(input = 5)'), true);
+		assert.strictEqual(isRunnableHeader('and(other)'), false);
+		assert.strictEqual(isRunnableHeader('from(value Number)'), false);
+	});
+
+	test('Run without tests is manual and only executes when requested explicitly', () => {
+		const methods = discoverStrictTests([
+			'has logger',
+			'Run',
+			'\tconstant worldHelper = TextHelper("World")',
+			'\tlogger.Log(worldHelper.Greet)'
+		].join('\n'));
+		const run = methods.find((method) => method.name === 'Run');
+		assert.ok(run);
+		assert.strictEqual(isManualMethod(run!), true);
+		assert.strictEqual(shouldExecuteManual(run!, false), false);
+		assert.strictEqual(shouldExecuteManual(run!, true), true);
+		assert.strictEqual(methodsWithTests(methods).length, 0);
 	});
 
 	test('methodForLine maps a test line to its method, never a tests node', () => {
@@ -155,7 +188,8 @@ suite('scrunch discover', () => {
 suite('scrunch format', () => {
 	test('formatDuration uses us below 100us and a single ms value at or above', () => {
 		assert.strictEqual(formatDuration(undefined), undefined);
-		assert.strictEqual(formatDuration(0), undefined);
+		assert.strictEqual(formatDuration(0), '<1us');
+		assert.strictEqual(formatDuration(0.0004), '<1us');
 		assert.strictEqual(formatDuration(0.04), '40us');
 		assert.strictEqual(formatDuration(0.099), '99us');
 		assert.strictEqual(formatDuration(0.1), '0.1ms');
@@ -163,6 +197,16 @@ suite('scrunch format', () => {
 		assert.strictEqual(formatDuration(1.24), '1.2ms');
 		assert.strictEqual(formatDuration(18), '18ms');
 		assert.strictEqual(formatDuration(1500), '1.5s');
+	});
+
+	test('parseStackFrames keeps Strict frames and drops C# runtime frames', () => {
+		const frames = parseStackFrames(
+			'at TextHelper.Greet in C:\\repo\\TextHelper.strict:line 5\n' +
+			'at Strict.HighLevelRuntime.MethodCallEvaluator.Evaluate in C:\\repo\\MethodCallEvaluator.cs:line 46'
+		);
+		assert.deepStrictEqual(frames, [
+			{ label: 'TextHelper.Greet', file: 'C:\\repo\\TextHelper.strict', line: 5 }
+		]);
 	});
 
 	test('parseStackFrames reads clickable Strict frames', () => {
@@ -190,107 +234,106 @@ suite('scrunch format', () => {
 		assert.ok(output.includes('Boolean.strict:line 2'));
 	});
 
-	test('formatTestHover includes duration', () => {
-		const message: TestRunnerNotification = {
-			lineNumber: 1,
-			state: 1,
-			expression: 'not true is false',
-			methodName: 'not',
-			durationMs: 0.8
-		};
-		assert.ok(formatTestHover(message).includes('0.8ms'));
-	});
-
-	test('formatSingleTestOutput is just that test and its result', () => {
-		const passed = formatSingleTestOutput({
-			lineNumber: 2,
-			state: 1,
-			expression: 'TextHelper("World").Greet is "Hello, World!"',
-			methodName: 'Greet',
-			typeName: 'TextHelper',
-			durationMs: 0.012
+	test('formatMethodOutput is stats, not the test expression', () => {
+		const passed = formatMethodOutput({
+			durationMs: 0.012,
+			lastRunAt: '2026-08-16T12:00:00.000Z',
+			methodsCalled: 1,
+			linesCalled: 3,
+			callCount: 2
 		});
-		assert.ok(passed.includes('TextHelper("World").Greet is "Hello, World!"'));
-		assert.ok(passed.includes('passed'));
-		assert.ok(passed.includes('12us'));
+		assert.ok(!passed.includes('TextHelper("World").Greet'));
+		assert.ok(!passed.includes('passed'));
 		assert.ok(!passed.includes('older results'));
-		const failed = formatSingleTestOutput({
-			lineNumber: 1,
-			state: 0,
-			expression: 'not true is false',
-			methodName: 'not',
-			details: 'true is false',
-			message: '"not" method failed: not true is false',
-			stackTrace: 'at Strict/Boolean.not in C:\\repo\\Boolean.strict:line 4'
+		assert.ok(passed.includes('12us'));
+		assert.ok(passed.includes('Methods called: 1'));
+		assert.ok(passed.includes('Lines called: 3'));
+		assert.ok(passed.includes('Called: 2 times'));
+		assert.ok(passed.includes('Last run:'));
+		const failed = formatMethodOutput({
+			durationMs: 0.8,
+			lastRunAt: '2026-08-16T12:00:00.000Z',
+			details: '"Hello" is "Hello, yo!"',
+			expected: '"Hello, yo!"',
+			actual: '"Hello"',
+			stackTrace: 'at TextHelper.Greet in C:\\repo\\TextHelper.strict:line 3',
+			failed: true
 		});
-		assert.ok(failed.includes('failed'));
-		assert.ok(failed.includes('true is false'));
-		assert.ok(failed.includes('Boolean.strict:line 4'));
+		assert.ok(!failed.includes('TextHelper("yo").Greet is'));
+		assert.ok(failed.includes('Expected: "Hello, yo!"'));
+		assert.ok(failed.includes('Actual: "Hello"'));
+		assert.ok(failed.includes('TextHelper.strict:line 3'));
+		assert.ok(failed.includes('0.8ms'));
 	});
 
-	test('formatLineTests lists every test that covered the line', () => {
-		const text = formatLineTests([
-			{
-				lineNumber: 2,
-				state: 1,
-				expression: 'TextHelper("World").Greet is "Hello, World!"',
-				methodName: 'Greet',
-				durationMs: 0.02
-			},
-			{
-				lineNumber: 3,
-				state: 1,
-				expression: 'TextHelper("Strict").Greet is "Hello, Strict!"',
-				methodName: 'Greet',
-				durationMs: 0.03
-			}
-		]);
-		assert.ok(text.includes('TextHelper("World").Greet is "Hello, World!"'));
-		assert.ok(text.includes('TextHelper("Strict").Greet is "Hello, Strict!"'));
-		assert.ok(text.includes('20us'));
+	test('formatErrorSummary is a short human name, not a type path', () => {
+		assert.strictEqual(
+			formatErrorSummary(
+				'Cannot call body on trait method: TextWriter.Write is a trait method and has no implementation'
+			),
+			'Cannot call body on trait method'
+		);
+		assert.strictEqual(formatErrorSummary('Strict/TextWriter.Write'), 'Strict/TextWriter.Write');
+		assert.strictEqual(formatErrorSummary(undefined), undefined);
 	});
 
-	test('formatTestHover marks cached passes', () => {
-		const hover = formatTestHover({
-			lineNumber: 1,
-			state: 1,
-			expression: '5 is 5',
-			methodName: 'Run',
-			cached: true
+	test('formatMethodOutput shows console text when the test printed something', () => {
+		const text = formatMethodOutput({
+			durationMs: 1.5,
+			lastRunAt: '2026-08-16T12:00:00.000Z',
+			consoleOutput: 'Hello, World!\nHello, Strict!'
 		});
-		assert.ok(hover.includes('cached'));
+		assert.ok(text.startsWith('Hello, World!'));
+		assert.ok(text.includes('Hello, Strict!'));
+		assert.ok(text.includes('1.2ms') || text.includes('1.5ms'));
+	});
+
+	test('parseDiscrepancy reads actual is expected', () => {
+		assert.deepStrictEqual(parseDiscrepancy('"Hello" is "Hello, yo!"'), {
+			actual: '"Hello"',
+			expected: '"Hello, yo!"'
+		});
+		assert.strictEqual(parseDiscrepancy(undefined), undefined);
 	});
 });
 
 suite('scrunch coverage', () => {
-	test('marks implementation lines from the tests that called them', () => {
+	test('TextHelper: checkmark on Greet, dots on tests and impl, never on members', () => {
 		const methods = discoverStrictTests([
+			'has value Text',
 			'Greet Text',
 			'\tTextHelper("World").Greet is "Hello, World!"',
 			'\tTextHelper("Strict").Greet is "Hello, Strict!"',
 			'\t"Hello, " + value + "!"'
 		].join('\n'));
 		const results = new Map<number, TestRunnerNotification>([
-			[1, {
-				lineNumber: 1, state: 1, expression: 'TextHelper("World").Greet is "Hello, World!"',
-				methodName: 'Greet', durationMs: 0.02
-			}],
 			[2, {
-				lineNumber: 2, state: 1, expression: 'TextHelper("Strict").Greet is "Hello, Strict!"',
-				methodName: 'Greet', durationMs: 0.03
+				lineNumber: 2, state: 1, expression: 'TextHelper("World").Greet is "Hello, World!"',
+				methodName: 'Greet', durationMs: 0.0004
+			}],
+			[3, {
+				lineNumber: 3, state: 1, expression: 'TextHelper("Strict").Greet is "Hello, Strict!"',
+				methodName: 'Greet', durationMs: 0.0005
 			}]
 		]);
 		const marks = lineCoverageMarks(methods, results, new Set());
-		const impl = marks.find((mark) => mark.lineNumber === 3);
-		assert.ok(impl);
-		assert.strictEqual(impl?.failed, false);
-		assert.strictEqual(impl?.tests.length, 2);
-		const methodLine = marks.find((mark) => mark.lineNumber === 0);
-		assert.ok(methodLine);
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 0), undefined);
+		const methodLine = marks.find((mark) => mark.lineNumber === 1);
+		assert.strictEqual(methodLine?.kind, 'status');
 		assert.strictEqual(methodLine?.failed, false);
+		const firstTest = marks.find((mark) => mark.lineNumber === 2);
+		assert.strictEqual(firstTest?.kind, 'coverage');
+		assert.ok(formatCoverageHover(firstTest!).includes('<1us'));
+		assert.ok(!formatCoverageHover(firstTest!).includes('Click to run'));
+		const impl = marks.find((mark) => mark.lineNumber === 4);
+		assert.strictEqual(impl?.kind, 'coverage');
+		assert.strictEqual(impl?.callCount, 2);
+		const implHover = formatCoverageHover(impl!);
+		assert.ok(implHover.includes('Called: 2 times so far'));
+		assert.ok(implHover.includes('<1us') || implHover.includes('us'));
 	});
 
-	test('failed test paints the test line and implementation red', () => {
+	test('failed is-check paints the test line red, not the implementation', () => {
 		const methods = discoverStrictTests([
 			'Greet Text',
 			'\tTextHelper("World").Greet is "Hello, World!"',
@@ -299,12 +342,35 @@ suite('scrunch coverage', () => {
 		const results = new Map<number, TestRunnerNotification>([
 			[1, {
 				lineNumber: 1, state: 0, expression: 'TextHelper("World").Greet is "Hello, World!"',
-				methodName: 'Greet', details: '"Hello, World!" is "nope"'
+				methodName: 'Greet', details: '"Hello" is "Hello, World!"',
+				expected: '"Hello, World!"', actual: '"Hello"'
 			}]
 		]);
 		const marks = lineCoverageMarks(methods, results, new Set());
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 0)?.kind, 'status');
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 0)?.failed, true);
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1)?.failed, true);
-		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.failed, true);
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1)?.kind, 'coverage');
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.failed, false);
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.kind, 'coverage');
+		assert.strictEqual(formatInlineFailure(marks.find((mark) => mark.lineNumber === 1)!),
+			'expected "Hello, World!"  got "Hello"');
+	});
+
+	test('unrun manual Run is not painted from parse errors', () => {
+		const methods = discoverStrictTests([
+			'has logger',
+			'Run',
+			'\tconstant worldHelper = TextHelper("World")'
+		].join('\n'));
+		const marks = lineCoverageMarks(methods, new Map(), new Set([2]));
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1), undefined);
+	});
+
+	test('shouldShowInlineValue drops true and echoed source', () => {
+		assert.strictEqual(shouldShowInlineValue('\tvalue then false else true', 'true'), false);
+		assert.strictEqual(shouldShowInlineValue('\t5 + 5', '10'), true);
+		assert.strictEqual(shouldShowInlineValue('\t"Hello, " + value + "!"', '"Hello, " + value + "!"'), false);
 	});
 });
 

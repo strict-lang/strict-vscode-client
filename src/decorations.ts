@@ -9,11 +9,10 @@ import {
 	Uri,
 	window
 } from 'vscode';
-import { LineCoverageMark } from './scrunchModel';
-import { formatDuration, TestRunnerNotification } from './testResults';
+import { formatCoverageHover, formatInlineFailure, LineCoverageMark, shouldShowInlineValue } from './scrunchModel';
+import { TestRunnerNotification } from './testResults';
 
 export type { TestRunnerNotification } from './testResults';
-export { formatTestHover } from './testResults';
 
 export const showResultCommand = 'strict-vscode-client.scrunch.showResult';
 
@@ -24,6 +23,8 @@ export type ValueEvaluationNotification = {
 export class DecorationController {
 	private readonly passType: TextEditorDecorationType;
 	private readonly failType: TextEditorDecorationType;
+	private readonly statusFailType: TextEditorDecorationType;
+	private readonly statusHoverType: TextEditorDecorationType;
 	private readonly marksByUri = new Map<string, Map<number, LineCoverageMark>>();
 	private readonly valueDecorations = new Map<number, TextEditorDecorationType>();
 
@@ -36,11 +37,18 @@ export class DecorationController {
 			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-fail.svg')),
 			gutterIconSize: 'contain'
 		});
+		this.statusFailType = window.createTextEditorDecorationType({
+			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-fail.svg')),
+			gutterIconSize: 'contain'
+		});
+		this.statusHoverType = window.createTextEditorDecorationType({});
 	}
 
 	public dispose(): void {
 		this.passType.dispose();
 		this.failType.dispose();
+		this.statusFailType.dispose();
+		this.statusHoverType.dispose();
 		this.marksByUri.clear();
 		for (const decoration of this.valueDecorations.values()) {
 			decoration.dispose();
@@ -84,7 +92,11 @@ export class DecorationController {
 				continue;
 			}
 			const variableValue = message.lineTextPair[key];
-			const lineLength = editor.document.lineAt(lineNumber).text.length;
+			const lineText = editor.document.lineAt(lineNumber).text;
+			if (!shouldShowInlineValue(lineText, variableValue)) {
+				continue;
+			}
+			const lineLength = lineText.length;
 			const decorationType = window.createTextEditorDecorationType({
 				after: {
 					contentText: `  ${variableValue}`,
@@ -92,7 +104,7 @@ export class DecorationController {
 				}
 			});
 			this.valueDecorations.set(lineNumber, decorationType);
-			editor.setDecorations(decorationType, [{
+			setDecorations(editor, decorationType, [{
 				range: new Range(lineNumber, lineLength, lineNumber, lineLength)
 			}]);
 		}
@@ -119,20 +131,48 @@ export class DecorationController {
 		const byLine = this.marksForUri(editor.document.uri.toString());
 		const passed: DecorationOptions[] = [];
 		const failed: DecorationOptions[] = [];
+		const statusFailed: DecorationOptions[] = [];
+		const statusHover: DecorationOptions[] = [];
 		if (byLine) {
 			for (const mark of byLine.values()) {
 				if (mark.lineNumber < 0 || mark.lineNumber >= editor.document.lineCount) {
 					continue;
 				}
+				const line = editor.document.lineAt(mark.lineNumber);
 				const item: DecorationOptions = {
-					range: new Range(mark.lineNumber, 0, mark.lineNumber, 0),
-					hoverMessage: coverageHover(editor.document.uri, mark)
+					range: new Range(mark.lineNumber, 0, mark.lineNumber, line.text.length),
+					hoverMessage: coverageHover(editor.document.uri, mark),
+					renderOptions: inlineFailure(mark)
 				};
+				if (mark.kind === 'status') {
+					if (mark.failed && mark.tests.length === 0) {
+						statusFailed.push(item);
+					} else if (mark.tests.length > 0) {
+						statusHover.push(item);
+					}
+					continue;
+				}
 				(mark.failed ? failed : passed).push(item);
 			}
 		}
-		editor.setDecorations(this.passType, passed);
-		editor.setDecorations(this.failType, failed);
+		setDecorations(editor, this.passType, passed);
+		setDecorations(editor, this.failType, failed);
+		setDecorations(editor, this.statusFailType, statusFailed);
+		setDecorations(editor, this.statusHoverType, statusHover);
+	}
+}
+
+function setDecorations(
+	editor: TextEditor,
+	type: TextEditorDecorationType,
+	items: DecorationOptions[]
+): void {
+	try {
+		if (!window.visibleTextEditors.includes(editor)) {
+			return;
+		}
+		editor.setDecorations(type, items);
+	} catch {
 	}
 }
 
@@ -140,20 +180,30 @@ function coverageHover(uri: Uri, mark: LineCoverageMark): MarkdownString {
 	const hover = new MarkdownString(undefined, true);
 	hover.isTrusted = { enabledCommands: [showResultCommand] };
 	hover.supportThemeIcons = true;
-	if (mark.tests.length === 0) {
-		hover.appendMarkdown(mark.failed ? 'SCrunch: error on this line' : 'SCrunch');
-		return hover;
+	const text = formatCoverageHover(mark);
+	if (text) {
+		hover.appendMarkdown(text);
+	} else if (mark.failed) {
+		hover.appendMarkdown('SCrunch: error on this line');
 	}
-	hover.appendMarkdown(`SCrunch  ${mark.failed ? 'failed' : 'passed'}\n\n`);
-	for (const test of mark.tests) {
-		const icon = test.state === 0 ? '$(testing-failed-icon)' : '$(testing-passed-icon)';
-		const duration = test.cached ? 'cached' : formatDuration(test.durationMs);
-		const expression = test.expression?.trim() || `line ${test.lineNumber + 1}`;
-		const args = encodeURIComponent(JSON.stringify([uri.toString(), test.lineNumber]));
-		const suffix = duration ? `  ${duration}` : '';
-		hover.appendMarkdown(`${icon} [${expression}](command:${showResultCommand}?${args})${suffix}\n\n`);
+	if (mark.kind === 'status' && mark.tests.length > 0) {
+		const args = encodeURIComponent(JSON.stringify([uri.toString(), mark.lineNumber]));
+		hover.appendMarkdown(`${text ? '\n\n' : ''}[Show in Testing window](command:${showResultCommand}?${args})`);
 	}
 	return hover;
+}
+
+function inlineFailure(mark: LineCoverageMark): DecorationOptions['renderOptions'] {
+	const text = formatInlineFailure(mark);
+	if (!text) {
+		return undefined;
+	}
+	return {
+		after: {
+			contentText: `  ${text}`,
+			color: '#a9a9a9'
+		}
+	};
 }
 
 function uriKeys(uri: string): string[] {

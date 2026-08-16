@@ -45,6 +45,16 @@ suite('diagnostics', () => {
 		);
 	});
 
+	test('formatDiagnosticMessage drops Interpreter execution failed prefix', () => {
+		const raw = [
+			'Cannot + left="Hello, " right="World" (TextHelper)',
+			'   at TextHelper.Greet in C:\\repo\\TextHelper.strict:line 5'
+		].join('\n');
+		const formatted = formatDiagnosticMessage('InterpreterExecutionFailed', raw);
+		assert.ok(!formatted.startsWith('Interpreter execution failed'));
+		assert.ok(formatted.includes('Cannot + left="Hello, " right="World" (TextHelper)'));
+	});
+
 	test('formatDiagnosticMessage prefers humanized code over raw type name', () => {
 		const raw =
 			'EmptyLineIsNotAllowed: \n   at Strict/Boolean in C:\\repo\\Boolean.strict:line 30\n';
