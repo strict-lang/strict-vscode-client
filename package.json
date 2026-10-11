@@ -1,7 +1,7 @@
 {
   "name": "strict-language",
   "displayName": "Strict Language",
-  "description": "Language support for Strict: syntax highlighting, LSP diagnostics, autocomplete, inline tests, and run commands. See https://strict-lang.org/",
+  "description": "Language support for Strict: syntax highlighting, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler (no .NET). See https://strict-lang.org/",
   "version": "0.1.0",
   "publisher": "strict-lang",
   "repository": {
@@ -24,8 +24,7 @@
   "keywords": [
     "strict",
     "strict-lang",
-    "language server",
-    "lsp"
+    "scrunch"
   ],
   "activationEvents": [
     "onLanguage:strict",
@@ -41,11 +40,7 @@
       },
       {
         "command": "strict-vscode-client.run",
-        "title": "Strict: Run Method..."
-      },
-      {
-        "command": "strict-vscode-client.restartServer",
-        "title": "Strict: Restart Language Server"
+        "title": "Strict: Run File with Arguments..."
       },
       {
         "command": "strict-vscode-client.scrunch.focus",
@@ -124,6 +119,27 @@
         "when": "editorTextFocus && editorHasCodeActionsProvider && resourceLangId == strict"
       }
     ],
+    "taskDefinitions": [
+      {
+        "type": "strict",
+        "required": [
+          "file"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": ".strict file with a Run method, relative to the workspace folder"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Arguments passed to Run"
+          }
+        }
+      }
+    ],
     "configurationDefaults": {
       "explorer.fileNesting.patterns": {
         "*.strict": "${capture}.strictbinary"
@@ -132,20 +148,10 @@
     "configuration": {
       "title": "Strict",
       "properties": {
-        "strict.languageServer.path": {
+        "strict.root": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to `Strict.LanguageServer.dll`, executable, or project folder. Empty = auto-detect sibling `Strict` repo build output or PATH."
-        },
-        "strict.cli.path": {
-          "type": "string",
-          "default": "",
-          "markdownDescription": "Path to `Strict.dll` or Strict executable used by **Strict: Run File**. Empty = auto-detect."
-        },
-        "strict.dotnetPath": {
-          "type": "string",
-          "default": "dotnet",
-          "description": "dotnet host used when launching DLL builds of the language server or CLI."
+          "markdownDescription": "Strict folder containing `Compiler/NativeCompiler.exe` and the base `.strict` types. Empty = the newest `NativeCompiler` of the workspace, a sibling `Strict` repository or the copy bundled with the extension."
         }
       }
     },
@@ -172,7 +178,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "node bundle-strict.mjs && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
@@ -192,8 +198,5 @@
     "glob": "^13.0.6",
     "mocha": "^11.7.5",
     "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "vscode-languageclient": "^9.0.1"
   }
 }

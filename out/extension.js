@@ -34,262 +34,192 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.activate = activate;
-exports.deactivate = deactivate;
+const fs = __importStar(require("fs"));
+const os = __importStar(require("os"));
+const path = __importStar(require("path"));
 const vscode = __importStar(require("vscode"));
-const node_1 = require("vscode-languageclient/node");
 const codeActions_1 = require("./codeActions");
 const decorations_1 = require("./decorations");
 const diagnostics_1 = require("./diagnostics");
+const nativeCompiler_1 = require("./nativeCompiler");
 const paths_1 = require("./paths");
 const scrunchCache_1 = require("./scrunchCache");
+const scrunchDiscover_1 = require("./scrunchDiscover");
 const scrunch_1 = require("./scrunch");
-const server_1 = require("./server");
-const runMethodCommand = 'strict-vscode-client.run';
-const runFileCommand = 'strict-vscode-client.runFile';
-const restartServerCommand = 'strict-vscode-client.restartServer';
-let client;
-let serverHandles;
+const notFound = `Strict not found: build ${paths_1.compilerFile} in the Strict repository next to this extension or set strict.root`;
+const parallelRuns = Math.max(1, os.cpus().length - 1);
 let output;
-let decorations;
-let scrunch;
-let diagnosticHighlighter;
-let clientCodeActions;
-async function activate(context) {
+let extensionPath;
+function activate(context) {
     output = vscode.window.createOutputChannel('Strict');
-    decorations = new decorations_1.DecorationController(context.extensionPath);
-    scrunch = (0, scrunch_1.registerScrunch)(decorations);
-    diagnosticHighlighter = new diagnostics_1.DiagnosticHighlighter();
+    extensionPath = context.extensionPath;
+    const decorations = new decorations_1.DecorationController(context.extensionPath);
     (0, decorations_1.registerDecorationLifecycle)(context, decorations);
-    context.subscriptions.push(output, diagnosticHighlighter, scrunch);
-    context.subscriptions.push(vscode.window.registerFileDecorationProvider({
-        provideFileDecoration(uri) {
-            if (!(0, scrunchCache_1.isStrictBinaryPath)(uri.fsPath)) {
-                return undefined;
-            }
-            return {
-                color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground'),
-                tooltip: 'Cached compiled bytecode'
-            };
+    const tester = new NativeTester((result) => scrunch.applyResult(result));
+    const scrunch = (0, scrunch_1.registerScrunch)(decorations, tester);
+    if (!strictRoot()) {
+        output.appendLine(notFound);
+        void vscode.window.showWarningMessage(notFound);
+    }
+    context.subscriptions.push(output, tester, scrunch, new diagnostics_1.DiagnosticHighlighter(), (0, codeActions_1.registerCodeActionProvider)(), vscode.window.registerFileDecorationProvider({
+        provideFileDecoration: (uri) => (0, scrunchCache_1.isStrictBinaryPath)(uri.fsPath)
+            ? { color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground'), tooltip: 'Cached compiled bytecode' }
+            : undefined
+    }), vscode.tasks.registerTaskProvider('strict', {
+        provideTasks: () => [],
+        resolveTask: (task) => runTask(task.definition, task.scope)
+    }), vscode.commands.registerCommand('strict-vscode-client.runFile', () => runCurrentFile([])), vscode.commands.registerCommand('strict-vscode-client.run', async () => {
+        const text = await vscode.window.showInputBox({ prompt: 'Arguments passed to Run', placeHolder: 'e.g. 5 10' });
+        if (text !== undefined) {
+            await runCurrentFile(text.split(/\s+/).filter(Boolean));
         }
-    }));
-    context.subscriptions.push(vscode.commands.registerCommand(runFileCommand, () => runCurrentFile(context)), vscode.commands.registerCommand(restartServerCommand, () => restartServer(context)), vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => scrunch.showInTesting()), vscode.commands.registerCommand('strict-vscode-client.scrunch.showLineTests', () => scrunch.showLineTests()), vscode.commands.registerCommand(decorations_1.showResultCommand, (uri, lineNumber) => scrunch.showResult(uri, lineNumber)), vscode.workspace.onDidChangeConfiguration((event) => {
+    }), vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => scrunch.showInTesting()), vscode.commands.registerCommand('strict-vscode-client.scrunch.showLineTests', () => scrunch.showLineTests()), vscode.commands.registerCommand(decorations_1.showResultCommand, (uri, lineNumber) => scrunch.showResult(uri, lineNumber)), vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration('strict')) {
-            void restartServer(context);
+            void scrunch.discoverWorkspace();
         }
     }));
-    await startServer(context);
 }
-async function deactivate() {
-    await stopServer();
+function strictRoot() {
+    return (0, paths_1.findStrictRoot)(vscode.workspace.getConfiguration('strict').get('root'), vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [], extensionPath);
 }
-async function startServer(context) {
-    const config = vscode.workspace.getConfiguration('strict');
-    const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
-    const launch = (0, paths_1.resolveLanguageServerLaunch)({
-        configuredPath: config.get('languageServer.path'),
-        dotnetPath: config.get('dotnetPath'),
-        workspaceFolders,
-        extensionPath: context.extensionPath
-    });
-    if (!launch) {
-        const message = 'Strict language server not found. Build Strict.LanguageServer or set strict.languageServer.path';
-        output.appendLine(message);
-        void vscode.window.showWarningMessage(message);
-        return;
-    }
-    const clientOptions = {
-        documentSelector: paths_1.strictDocumentSelector,
-        progressOnInitialization: true,
-        outputChannel: output,
-        connectionOptions: {
-            maxRestartCount: 3,
-            cancellationStrategy: node_1.CancellationStrategy.Message
-        },
-        middleware: {
-            handleDiagnostics: (uri, diagnostics, next) => {
-                const polished = diagnostics.map((item) => (0, diagnostics_1.polishDiagnostic)(item, uri));
-                next(uri, polished);
-            },
-            executeCommand: async (command, args, next) => {
-                if (command !== runMethodCommand) {
-                    return next(command, args);
-                }
-                const provided = readMethodLabel(args);
-                const methodCall = provided ?? await promptForMethodCall();
-                if (!methodCall) {
-                    return undefined;
-                }
-                const documentUri = readDocumentUri(args) ??
-                    vscode.window.activeTextEditor?.document.uri.toString();
-                if (!documentUri) {
-                    void vscode.window.showErrorMessage('Open a .strict file before running a method.');
-                    return undefined;
-                }
-                return next(command, [{ label: methodCall }, documentUri]);
-            }
-        }
-    };
-    try {
-        serverHandles = await (0, server_1.startLanguageClient)(launch, clientOptions, output);
-        client = serverHandles.client;
-        client.onNotification('testRunnerNotification', (message) => {
-            scrunch.applyResult(message);
-        });
-        client.onNotification('valueEvaluationNotification', (message) => {
-            decorations.applyValues(message);
-        });
-        registerClientCodeActionsIfNeeded(context);
-        output.appendLine(`Strict language server started via ${launch.displayName}`);
-        scrunch.setRunner(async (uri, methodName) => {
-            output.appendLine(`SCrunch running ${methodName} in ${uri.fsPath}`);
-            await client.sendRequest(node_1.ExecuteCommandRequest.type, {
-                command: runMethodCommand,
-                arguments: [{ label: methodName }, uri.toString()]
-            });
-        });
-        scrunch.onLanguageServerReady();
-    }
-    catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        output.appendLine(`Failed to start language server: ${text}`);
-        void vscode.window.showErrorMessage(`Failed to start Strict language server: ${text}`);
-        // Still offer local quick fixes even if the server failed to start
-        ensureClientCodeActions(context);
-        await stopServer();
-    }
-}
-function registerClientCodeActionsIfNeeded(context) {
-    const capabilities = client?.initializeResult?.capabilities;
-    const serverHasCodeActions = Boolean(capabilities?.codeActionProvider);
-    if (serverHasCodeActions) {
-        output.appendLine('Using language server code actions (quick fixes)');
-        disposeClientCodeActions();
-        return;
-    }
-    output.appendLine('Language server has no code actions; enabling client-side quick fixes');
-    ensureClientCodeActions(context);
-}
-function ensureClientCodeActions(context) {
-    if (clientCodeActions) {
-        return;
-    }
-    clientCodeActions = (0, codeActions_1.registerCodeActionProvider)();
-    context.subscriptions.push(clientCodeActions);
-}
-function disposeClientCodeActions() {
-    clientCodeActions?.dispose();
-    clientCodeActions = undefined;
-}
-async function stopServer() {
-    const handles = serverHandles;
-    serverHandles = undefined;
-    client = undefined;
-    if (!handles) {
-        return;
-    }
-    try {
-        await handles.stop();
-    }
-    catch (error) {
-        const text = error instanceof Error ? error.message : String(error);
-        output.appendLine(`Error stopping language server: ${text}`);
-    }
-}
-async function restartServer(context) {
-    output.appendLine('Restarting Strict language server...');
-    await stopServer();
-    await startServer(context);
-}
-function readMethodLabel(args) {
-    const first = args?.[0];
-    if (first && typeof first === 'object' && 'label' in first) {
-        const label = first.label;
-        if (typeof label === 'string' && label.trim().length > 0) {
-            return label.trim();
-        }
-    }
-    return undefined;
-}
-function readDocumentUri(args) {
-    const second = args?.[1];
-    return typeof second === 'string' && second.length > 0 ? second : undefined;
-}
-async function promptForMethodCall() {
-    const quickPick = vscode.window.createQuickPick();
-    quickPick.title = 'Strict method call';
-    quickPick.placeholder = 'e.g. Run or (1, 2, 3).Length';
-    quickPick.items = [{ label: 'Run' }];
-    quickPick.ignoreFocusOut = true;
-    return new Promise((resolve) => {
-        let settled = false;
-        const finish = (value) => {
-            if (settled) {
-                return;
-            }
-            settled = true;
-            quickPick.hide();
-            quickPick.dispose();
-            resolve(value);
-        };
-        quickPick.onDidChangeValue(() => {
-            const value = quickPick.value.trim();
-            if (value.length === 0) {
-                quickPick.items = [{ label: 'Run' }];
-                return;
-            }
-            quickPick.items = [{ label: value }, { label: 'Run' }];
-        });
-        quickPick.onDidAccept(() => {
-            const selected = quickPick.selectedItems[0]?.label ?? quickPick.value.trim();
-            finish(selected.length > 0 ? selected : undefined);
-        });
-        quickPick.onDidHide(() => finish(undefined));
-        quickPick.show();
-    });
-}
-async function runCurrentFile(context) {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.languageId !== 'strict') {
+async function runCurrentFile(args) {
+    const document = vscode.window.activeTextEditor?.document;
+    if (!document || document.languageId !== 'strict') {
         void vscode.window.showErrorMessage('Open a .strict file to run.');
         return;
     }
-    if (editor.document.isDirty) {
-        const saved = await editor.document.save();
-        if (!saved) {
-            return;
-        }
-    }
-    const config = vscode.workspace.getConfiguration('strict');
-    const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
-    const launch = (0, paths_1.resolveStrictCliLaunch)({
-        configuredPath: config.get('cli.path'),
-        dotnetPath: config.get('dotnetPath'),
-        workspaceFolders,
-        extensionPath: context.extensionPath
-    });
-    if (!launch) {
-        void vscode.window.showErrorMessage('Strict CLI not found. Build the Strict project or set strict.cli.path');
+    if (document.isDirty && !(await document.save())) {
         return;
     }
-    const filePath = editor.document.uri.fsPath;
-    const { command, args } = (0, paths_1.buildRunFileArgs)(launch, filePath);
-    const terminal = vscode.window.terminals.find((item) => item.name === 'Strict')
-        ?? vscode.window.createTerminal({ name: 'Strict' });
-    terminal.show();
-    const commandLine = formatCommand(command, args);
-    output.appendLine(`Running: ${commandLine}`);
-    terminal.sendText(commandLine, true);
-}
-function formatCommand(command, args) {
-    return [command, ...args].map(quoteIfNeeded).join(' ');
-}
-function quoteIfNeeded(value) {
-    if (value.length === 0) {
-        return '""';
+    const task = runTask({ type: 'strict', file: document.uri.fsPath, args }, vscode.workspace.getWorkspaceFolder(document.uri));
+    if (task) {
+        await vscode.tasks.executeTask(task);
     }
-    if (!/[\s"]/g.test(value)) {
-        return value;
+}
+/** `strict` task, also usable in tasks.json: { "type": "strict", "file": "Examples/FizzBuzz.strict", "args": [] } */
+function runTask(definition, scope) {
+    const root = strictRoot();
+    if (!root) {
+        void vscode.window.showErrorMessage(notFound);
+        return undefined;
     }
-    return `"${value.replace(/"/g, '\\"')}"`;
+    const folder = typeof scope === 'object' ? scope.uri.fsPath : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const file = path.resolve(folder ?? root, String(definition.file));
+    return new vscode.Task(definition, scope ?? vscode.TaskScope.Workspace, `Run ${path.basename(file, '.strict')}`, 'Strict', new vscode.ProcessExecution(path.join(root, paths_1.compilerFile), ['run', path.relative(root, file), '.', ...(definition.args ?? [])], { cwd: root }));
+}
+/** Runs inline tests (`run test`) and validators (`check`) with the newest NativeCompiler, several processes at once. */
+class NativeTester {
+    constructor(report) {
+        this.report = report;
+        this.checks = vscode.languages.createDiagnosticCollection('strict');
+        this.crashes = vscode.languages.createDiagnosticCollection('strict tests');
+        this.files = new Set();
+        this.queue = new Set();
+        this.running = 0;
+        this.usedRoot = '';
+    }
+    dispose() {
+        this.checks.dispose();
+        this.crashes.dispose();
+    }
+    testAll(files) {
+        files.forEach((file) => this.files.add(file));
+        this.enqueue([...new Set(files.map((file) => path.dirname(file))), ...files]);
+    }
+    changed(file) {
+        this.files.add(file);
+        const sources = new Map([...this.files].map((known) => [known, readText(known)]));
+        this.enqueue([file, path.dirname(file), ...(0, nativeCompiler_1.dependents)(file, sources)], true);
+    }
+    deleted(file) {
+        this.files.delete(file);
+        this.checks.delete(vscode.Uri.file(file));
+        this.crashes.delete(vscode.Uri.file(file));
+    }
+    async run(uri, methodName) {
+        const root = strictRoot();
+        if (!root || methodName !== 'Run') {
+            throw new Error(root ? 'NativeCompiler only runs Run methods' : notFound);
+        }
+        const result = await (0, nativeCompiler_1.runStrict)(root, ['run', path.relative(root, uri.fsPath), '.']);
+        const method = (0, scrunchDiscover_1.discoverStrictTests)(readText(uri.fsPath)).find((item) => item.name === methodName);
+        this.report({
+            lineNumber: method?.lineNumber ?? 0, state: result.exitCode === 0 ? 1 : 0, uri: uri.toString(), methodName,
+            consoleOutput: result.output, durationMs: result.durationMs,
+            message: result.exitCode === 0 ? undefined : `Exit code ${result.exitCode}`
+        });
+    }
+    enqueue(entries, first = false) {
+        const waiting = first ? [...this.queue] : [];
+        if (first) {
+            this.queue.clear();
+        }
+        for (const entry of [...entries, ...waiting]) {
+            this.queue.add(entry);
+        }
+        this.next();
+    }
+    next() {
+        const root = strictRoot();
+        if (root && root !== this.usedRoot) {
+            this.usedRoot = root;
+            output.appendLine(`Using ${path.join(root, paths_1.compilerFile)}`);
+        }
+        while (root && this.running < parallelRuns && this.queue.size > 0) {
+            const entry = this.queue.values().next().value;
+            this.queue.delete(entry);
+            this.running++;
+            void (entry.endsWith('.strict') ? this.test(root, entry) : this.check(root, entry)).finally(() => {
+                this.running--;
+                this.next();
+            });
+        }
+    }
+    async test(root, file) {
+        const result = await (0, nativeCompiler_1.runStrict)(root, ['run', 'test', path.relative(root, file), '.']);
+        if (!this.files.has(file)) {
+            return;
+        }
+        const uri = vscode.Uri.file(file);
+        const source = readText(file);
+        const crash = (0, nativeCompiler_1.crashText)(result);
+        this.crashes.set(uri, crash ? [new vscode.Diagnostic(lineRange(source, 0), crash, vscode.DiagnosticSeverity.Error)] : []);
+        if (crash) {
+            output.appendLine(`${file}: ${crash}`);
+        }
+        for (const notification of (0, nativeCompiler_1.testResults)(source, uri.toString(), result)) {
+            this.report(notification);
+        }
+    }
+    async check(root, folder) {
+        const relative = path.relative(root, folder);
+        const result = await (0, nativeCompiler_1.runStrict)(root, ['check', relative.startsWith('..') || path.isAbsolute(relative) ? folder : relative || '.', '.']);
+        if (!/^Validation issues: \d+$/m.test(result.output)) {
+            output.appendLine(`Checking ${folder} failed with exit code ${result.exitCode}\n${result.output}`);
+            return;
+        }
+        const issues = (0, nativeCompiler_1.checkIssues)(result.output, root);
+        const files = new Map([...this.files].filter((file) => (0, paths_1.normalizeFsPath)(path.dirname(file)) === (0, paths_1.normalizeFsPath)(folder)).
+            concat(issues.map((issue) => issue.file)).map((file) => [(0, paths_1.normalizeFsPath)(file), file]));
+        for (const [key, file] of files) {
+            const source = readText(file);
+            this.checks.set(vscode.Uri.file(file), issues.filter((issue) => (0, paths_1.normalizeFsPath)(issue.file) === key).map((issue) => {
+                const diagnostic = new vscode.Diagnostic(lineRange(source, (0, nativeCompiler_1.issueLine)(source, issue.target)), issue.message ? `${issue.target}: ${issue.message}` : issue.target, vscode.DiagnosticSeverity.Error);
+                diagnostic.code = issue.rule;
+                return (0, diagnostics_1.polishDiagnostic)(diagnostic, vscode.Uri.file(file));
+            }));
+        }
+    }
+}
+function readText(file) {
+    try {
+        return fs.readFileSync(file, 'utf8');
+    }
+    catch {
+        return '';
+    }
+}
+function lineRange(source, line) {
+    return new vscode.Range(line, 0, line, source.split(/\r?\n/)[line]?.length ?? 0);
 }
 //# sourceMappingURL=extension.js.map

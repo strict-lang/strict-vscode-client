@@ -24,7 +24,6 @@ import {
 } from 'vscode';
 import { DecorationController } from './decorations';
 import { normalizeFsPath } from './paths';
-import { isCacheFresh, siblingBinaryPath } from './scrunchCache';
 import { discoverStrictTests, DiscoveredMethod, typeNameFromPath } from './scrunchDiscover';
 import {
 	enrichNotification,
@@ -32,7 +31,6 @@ import {
 	lineBelongsTo,
 	lineCoverageMarks,
 	methodForLine,
-	methodsWithTests,
 	shouldExecuteManual,
 	visibleMethods
 } from './scrunchModel';
@@ -48,6 +46,13 @@ import {
 
 const excludeGlob = '{**/bin/**,**/obj/**,**/node_modules/**,**/.git/**}';
 
+export type ScrunchTester = {
+	testAll(files: string[]): void;
+	changed(file: string): void;
+	deleted(file: string): void;
+	run(uri: Uri, methodName: string): Promise<void>;
+};
+
 export class ScrunchController implements Disposable {
 	private readonly controller: TestController;
 	private readonly watchers: FileSystemWatcher[] = [];
@@ -56,11 +61,10 @@ export class ScrunchController implements Disposable {
 	private publishTimer: ReturnType<typeof setTimeout> | undefined;
 	private lastPublishKey = '';
 	private userRunDepth = 0;
-	private runMethod: ((uri: Uri, methodName: string) => Thenable<unknown>) | undefined;
 	private readonly manualTag = new TestTag('scrunch.manual');
 	private readonly disposables: Disposable[] = [];
 
-	constructor(private readonly decorations: DecorationController) {
+	constructor(private readonly decorations: DecorationController, private readonly tester: ScrunchTester) {
 		this.controller = tests.createTestController('strict.scrunch', 'Types');
 		this.controller.refreshHandler = () => this.discoverWorkspace();
 		this.controller.createRunProfile('Run', TestRunProfileKind.Run,
@@ -69,7 +73,6 @@ export class ScrunchController implements Disposable {
 			(request) => this.onRunRequest(request), false, this.manualTag);
 		this.disposables.push(this.controller);
 		this.watchers.push(workspace.createFileSystemWatcher('**/*.strict'));
-		this.watchers.push(workspace.createFileSystemWatcher('**/*.strictbinary'));
 		for (const watcher of this.watchers) {
 			this.disposables.push(watcher);
 			watcher.onDidCreate((uri) => void this.onDiskChange(uri));
@@ -95,14 +98,6 @@ export class ScrunchController implements Disposable {
 			}
 		}));
 		void this.discoverWorkspace();
-	}
-
-	public onLanguageServerReady(): void {
-		this.queuePublish();
-	}
-
-	public setRunner(runMethod: (uri: Uri, methodName: string) => Thenable<unknown>): void {
-		this.runMethod = runMethod;
 	}
 
 	public dispose(): void {
@@ -209,11 +204,12 @@ export class ScrunchController implements Disposable {
 		}
 	}
 
-	private async discoverWorkspace(): Promise<void> {
-		const files = await workspace.findFiles('**/*.strict', excludeGlob);
+	public async discoverWorkspace(): Promise<void> {
+		const files = (await workspace.findFiles('**/*.strict', excludeGlob)).filter((uri) => !this.isIgnored(uri));
 		for (const uri of files) {
 			await this.discoverFile(uri);
 		}
+		this.tester.testAll(files.map((uri) => uri.fsPath));
 	}
 
 	private async discoverFile(uri: Uri): Promise<void> {
@@ -249,37 +245,21 @@ export class ScrunchController implements Disposable {
 			methodItem.tags = method.tests.length === 0 && method.runnable ? [this.manualTag] : [];
 			methodItem.children.replace([]);
 		}
-		if (await this.hasFreshBinary(uri)) {
-			if (methodsWithTests(discovered).length > 0) {
-				this.applyCachedPass(uri);
-			} else {
-				this.refreshCoverage(uri);
-			}
-			return;
-		}
 		this.refreshCoverage(uri);
 	}
 
 	private async onDiskChange(uri: Uri): Promise<void> {
-		if (uri.fsPath.toLowerCase().endsWith('.strictbinary')) {
-			const source = Uri.file(uri.fsPath.replace(/\.strictbinary$/i, '.strict'));
-			if (await this.hasFreshBinary(source)) {
-				await this.discoverFile(source);
-			}
+		if (this.isIgnored(uri)) {
 			return;
 		}
 		this.invalidate(uri);
 		await this.discoverFile(uri);
+		this.tester.changed(uri.fsPath);
 	}
 
 	private onDiskDelete(uri: Uri): void {
-		if (uri.fsPath.toLowerCase().endsWith('.strictbinary')) {
-			const source = Uri.file(uri.fsPath.replace(/\.strictbinary$/i, '.strict'));
-			this.invalidate(source);
-			void this.discoverFile(source);
-			return;
-		}
 		this.removeFile(uri);
+		this.tester.deleted(uri.fsPath);
 	}
 
 	private invalidate(uri: Uri): void {
@@ -295,57 +275,6 @@ export class ScrunchController implements Disposable {
 				child.description = undefined;
 				child.error = undefined;
 			});
-		}
-	}
-
-	private applyCachedPass(uri: Uri): void {
-		const fileItem = this.findFileItem(uri);
-		if (!fileItem) {
-			return;
-		}
-		const discovered = this.methodsFor(uri);
-		const byLine = new Map<number, TestRunnerNotification>();
-		for (const [line, message] of this.results.get(keyOf(uri)) ?? []) {
-			const method = discovered.find((item) => item.name === message.methodName);
-			if (method && method.tests.length === 0 && method.runnable) {
-				byLine.set(line, message);
-			}
-		}
-		for (const method of methodsWithTests(discovered)) {
-			const methodItem = fileItem.children.get(methodId(uri, method.name));
-			if (methodItem) {
-				methodItem.error = undefined;
-			}
-			for (const test of method.tests) {
-				byLine.set(test.lineNumber, {
-					lineNumber: test.lineNumber,
-					state: 1,
-					uri: uri.toString(),
-					expression: test.expression,
-					methodName: method.name,
-					typeName: typeNameFromPath(uri.fsPath),
-					cached: true
-				});
-			}
-		}
-		this.results.set(keyOf(uri), byLine);
-		fileItem.error = undefined;
-		this.queuePublish();
-	}
-
-	private async hasFreshBinary(uri: Uri): Promise<boolean> {
-		const sourceTime = await this.mtime(uri);
-		if (sourceTime === undefined) {
-			return false;
-		}
-		return isCacheFresh(sourceTime, await this.mtime(Uri.file(siblingBinaryPath(uri.fsPath))));
-	}
-
-	private async mtime(uri: Uri): Promise<number | undefined> {
-		try {
-			return (await workspace.fs.stat(uri)).mtime;
-		} catch {
-			return undefined;
 		}
 	}
 
@@ -633,13 +562,9 @@ export class ScrunchController implements Disposable {
 			run.failed(item, new TestMessage('Fix errors before running.\n' + text));
 			return;
 		}
-		if (!this.runMethod) {
-			run.failed(item, new TestMessage('Language server is not ready to run this method.'));
-			return;
-		}
 		run.started(item);
 		try {
-			await this.runMethod(uri, method.name);
+			await this.tester.run(uri, method.name);
 		} catch (error) {
 			const text = error instanceof Error ? error.message : String(error);
 			run.failed(item, new TestMessage(text));
@@ -647,7 +572,7 @@ export class ScrunchController implements Disposable {
 		}
 		const result = await this.waitForResult(uri, method);
 		if (!result) {
-			run.failed(item, new TestMessage('Language server did not return a result for ' + method.name));
+			run.failed(item, new TestMessage('Strict did not return a result for ' + method.name));
 			return;
 		}
 		this.reportStored(run, uri, item, method, result);
@@ -822,8 +747,8 @@ export class ScrunchController implements Disposable {
 	}
 }
 
-export function registerScrunch(decorations: DecorationController): ScrunchController {
-	return new ScrunchController(decorations);
+export function registerScrunch(decorations: DecorationController, tester: ScrunchTester): ScrunchController {
+	return new ScrunchController(decorations, tester);
 }
 
 function keyOf(uri: Uri): string {

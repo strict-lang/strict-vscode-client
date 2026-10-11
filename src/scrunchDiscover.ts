@@ -12,7 +12,7 @@ export type DiscoveredMethod = {
 };
 
 const memberPrefix = /^(has|constant|mutable|implement)\b/;
-const implementationStart = /^(for |if |return |constant |mutable )/;
+const implementationStart = /^(for |if |return |constant |mutable |let )/;
 const memberIdentifier = /\b(value|other)\b/;
 
 export function typeNameFromPath(filePath: string): string {
@@ -80,7 +80,7 @@ function methodName(header: string): string {
 
 function inferTests(body: DiscoveredTest[]): DiscoveredTest[] {
 	const tests: DiscoveredTest[] = [];
-	for (const line of body) {
+	for (const line of body.slice(0, -1)) {
 		if (implementationStart.test(line.expression) || isImplementationUsingMembers(line.expression)) {
 			break;
 		}

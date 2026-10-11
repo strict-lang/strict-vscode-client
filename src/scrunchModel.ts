@@ -106,14 +106,14 @@ export function lineCoverageMarks(
 			const discrepancy = own ? discrepancyOf(own) : undefined;
 			paint(marks, test.lineNumber, 'coverage', lineTests,
 				(own ? own.state === 0 : failed) || errorLines.has(test.lineNumber), {
-					durationMs: durationOrTiny(own?.durationMs ?? totalDuration(lineTests), lineTests),
+					durationMs: own?.durationMs ?? totalDuration(lineTests),
 					expected: discrepancy?.expected,
 					actual: discrepancy?.actual
 				});
 		}
 		for (const line of method.implementation) {
 			paint(marks, line.lineNumber, 'coverage', covering, errorLines.has(line.lineNumber), {
-				durationMs: durationOrTiny(totalDuration(covering), covering),
+				durationMs: totalDuration(covering),
 				callCount: covering.length
 			});
 		}
@@ -151,14 +151,6 @@ export function formatInlineFailure(mark: Pick<LineCoverageMark, 'expected' | 'a
 	return `expected ${mark.expected}  got ${mark.actual}`;
 }
 
-export function shouldShowInlineValue(lineText: string, value: string): boolean {
-	const trimmed = value.trim();
-	if (!trimmed || trimmed === 'true' || trimmed === 'false') {
-		return false;
-	}
-	return trimmed !== lineText.trim();
-}
-
 function coveringTests(
 	method: DiscoveredMethod,
 	results: Map<number, TestRunnerNotification>
@@ -174,13 +166,6 @@ function coveringTests(
 		return tests;
 	}
 	return [...results.values()].filter((result) => result.methodName === method.name);
-}
-
-function durationOrTiny(durationMs: number | undefined, tests: TestRunnerNotification[]): number | undefined {
-	if (durationMs !== undefined) {
-		return durationMs;
-	}
-	return tests.some((test) => !test.cached) ? 0 : undefined;
 }
 
 function totalDuration(tests: TestRunnerNotification[]): number | undefined {

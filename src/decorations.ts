@@ -9,16 +9,9 @@ import {
 	Uri,
 	window
 } from 'vscode';
-import { formatCoverageHover, formatInlineFailure, LineCoverageMark, shouldShowInlineValue } from './scrunchModel';
-import { TestRunnerNotification } from './testResults';
-
-export type { TestRunnerNotification } from './testResults';
+import { formatCoverageHover, formatInlineFailure, LineCoverageMark } from './scrunchModel';
 
 export const showResultCommand = 'strict-vscode-client.scrunch.showResult';
-
-export type ValueEvaluationNotification = {
-	lineTextPair: Record<string, string>;
-};
 
 export class DecorationController {
 	private readonly passType: TextEditorDecorationType;
@@ -26,7 +19,6 @@ export class DecorationController {
 	private readonly statusFailType: TextEditorDecorationType;
 	private readonly statusHoverType: TextEditorDecorationType;
 	private readonly marksByUri = new Map<string, Map<number, LineCoverageMark>>();
-	private readonly valueDecorations = new Map<number, TextEditorDecorationType>();
 
 	constructor(extensionPath: string) {
 		this.passType = window.createTextEditorDecorationType({
@@ -50,10 +42,6 @@ export class DecorationController {
 		this.statusFailType.dispose();
 		this.statusHoverType.dispose();
 		this.marksByUri.clear();
-		for (const decoration of this.valueDecorations.values()) {
-			decoration.dispose();
-		}
-		this.valueDecorations.clear();
 	}
 
 	public applyCoverage(uri: string, marks: LineCoverageMark[]): void {
@@ -75,39 +63,6 @@ export class DecorationController {
 			}
 		}
 		return undefined;
-	}
-
-	public applyValues(message: ValueEvaluationNotification): void {
-		const editor = window.activeTextEditor;
-		if (!editor || !message.lineTextPair) {
-			return;
-		}
-		for (const decoration of this.valueDecorations.values()) {
-			decoration.dispose();
-		}
-		this.valueDecorations.clear();
-		for (const key of Object.keys(message.lineTextPair)) {
-			const lineNumber = Number(key);
-			if (Number.isNaN(lineNumber) || lineNumber < 0 || lineNumber >= editor.document.lineCount) {
-				continue;
-			}
-			const variableValue = message.lineTextPair[key];
-			const lineText = editor.document.lineAt(lineNumber).text;
-			if (!shouldShowInlineValue(lineText, variableValue)) {
-				continue;
-			}
-			const lineLength = lineText.length;
-			const decorationType = window.createTextEditorDecorationType({
-				after: {
-					contentText: `  ${variableValue}`,
-					color: '#a9a9a9'
-				}
-			});
-			this.valueDecorations.set(lineNumber, decorationType);
-			setDecorations(editor, decorationType, [{
-				range: new Range(lineNumber, lineLength, lineNumber, lineLength)
-			}]);
-		}
 	}
 
 	public refreshActiveEditor(): void {

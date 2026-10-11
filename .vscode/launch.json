@@ -11,7 +11,8 @@
 			"request": "launch",
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}",
-				"--disable-extension=undefined.strict-vscode-client"
+				"--disable-extension=undefined.strict-vscode-client",
+				"${workspaceFolder}/../Strict"
 			],
 			"outFiles": [
 				"${workspaceFolder}/out/**/*.js"

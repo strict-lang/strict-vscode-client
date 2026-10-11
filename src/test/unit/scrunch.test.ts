@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { isCacheFresh, isStrictBinaryPath, siblingBinaryPath } from '../../scrunchCache';
+import { isStrictBinaryPath } from '../../scrunchCache';
 import { discoverStrictTests, isRunnableHeader, typeNameFromPath } from '../../scrunchDiscover';
 import {
 	enrichNotification,
@@ -10,7 +10,6 @@ import {
 	methodForLine,
 	methodsWithTests,
 	shouldExecuteManual,
-	shouldShowInlineValue,
 	visibleMethods
 } from '../../scrunchModel';
 import {
@@ -71,7 +70,7 @@ suite('scrunch discover', () => {
 	});
 
 	test('ignores has/constant/mutable lines as methods', () => {
-		const source = ['has logger', 'constant Pi = 3', 'Run', '\t5 is 5'].join('\n');
+		const source = ['has logger', 'constant Pi = 3', 'Run', '\t5 is 5', '\tlogger.Log(Pi)'].join('\n');
 		const methods = discoverStrictTests(source);
 		assert.strictEqual(methods.length, 1);
 		assert.strictEqual(methods[0].name, 'Run');
@@ -366,27 +365,9 @@ suite('scrunch coverage', () => {
 		const marks = lineCoverageMarks(methods, new Map(), new Set([2]));
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1), undefined);
 	});
-
-	test('shouldShowInlineValue drops true and echoed source', () => {
-		assert.strictEqual(shouldShowInlineValue('\tvalue then false else true', 'true'), false);
-		assert.strictEqual(shouldShowInlineValue('\t5 + 5', '10'), true);
-		assert.strictEqual(shouldShowInlineValue('\t"Hello, " + value + "!"', '"Hello, " + value + "!"'), false);
-	});
 });
 
 suite('scrunch cache', () => {
-	test('siblingBinaryPath swaps the extension', () => {
-		assert.strictEqual(siblingBinaryPath('C:\\repo\\Sum.strict'), 'C:\\repo\\Sum.strictbinary');
-		assert.strictEqual(siblingBinaryPath('/tmp/Foo.STRICT'), '/tmp/Foo.strictbinary');
-	});
-
-	test('isCacheFresh requires a binary at least as new as source', () => {
-		assert.strictEqual(isCacheFresh(100, undefined), false);
-		assert.strictEqual(isCacheFresh(100, 99), false);
-		assert.strictEqual(isCacheFresh(100, 100), true);
-		assert.strictEqual(isCacheFresh(100, 150), true);
-	});
-
 	test('isStrictBinaryPath only matches .strictbinary', () => {
 		assert.strictEqual(isStrictBinaryPath('C:\\repo\\TextHelper.strictbinary'), true);
 		assert.strictEqual(isStrictBinaryPath('/tmp/Foo.STRICTBINARY'), true);
