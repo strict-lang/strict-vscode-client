@@ -11,8 +11,8 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.output.txt
-# Do not ignore all of node_modules — runtime deps (e.g. vscode-languageclient)
-# must ship with the extension. vsce already omits devDependencies.
 out/test/**
 **/*.vsix
-bundle-strict.mjs
+package-vsix.mjs
+bun.lock
+Agents.md

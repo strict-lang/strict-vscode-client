@@ -31,19 +31,13 @@ suite('paths', () => {
 		return root;
 	}
 
-	test('findStrictRoot uses the newest NativeCompiler of sibling repo and bundled copy', () => {
+	test('findStrictRoot uses the newest Strict repository and the bundled copy only without one', () => {
 		const extension = path.join(tempRoot, 'strict-vscode-client');
-		const sibling = compilerIn(path.join(tempRoot, 'Strict'), 60);
-		const bundled = compilerIn(path.join(extension, 'strict'), 120);
-		assert.strictEqual(findStrictRoot(undefined, [], extension), sibling);
-		compilerIn(bundled, 0);
+		const bundled = compilerIn(path.join(extension, 'strict'), 0);
 		assert.strictEqual(findStrictRoot(undefined, [], extension), bundled);
-	});
-
-	test('findStrictRoot prefers the workspace over an equally new bundled copy', () => {
-		const extension = path.join(tempRoot, 'extension');
-		const workspace = compilerIn(path.join(tempRoot, 'Strict'), 60);
-		compilerIn(path.join(extension, 'strict'), 60);
+		const sibling = compilerIn(path.join(tempRoot, 'Strict'), 120);
+		assert.strictEqual(findStrictRoot(undefined, [], extension), sibling);
+		const workspace = compilerIn(path.join(tempRoot, 'Work'), 60);
 		assert.strictEqual(findStrictRoot(undefined, [workspace], extension), workspace);
 	});
 

@@ -5,13 +5,13 @@ import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
 import { TestRunnerNotification } from './testResults';
 
 export type StrictRun = { exitCode: number; output: string; durationMs: number };
-export type CheckIssue = { file: string; rule: string; target: string; message: string };
+export type CheckIssue = { file: string; rule: string; target: string };
 
 const timeoutMs = 60000;
 const summaryLine = /^(All tests passed|\d+ (tests )?failed) in /m;
-const issuePattern = /^(.+?\.strict): (?:\((\w+), (.*), ([^,]*)\)|(\w+): (.*))$/;
+const issuePattern = /^(.+?\.strict): (\w+): (.*)$/;
 
-/** Runs root/Compiler/NativeCompiler with root as working directory, root arguments are always ".". */
+/** Runs root/strict with root as working directory, root arguments are always ".". */
 export function runStrict(root: string, args: string[]): Promise<StrictRun> {
 	const started = Date.now();
 	return new Promise((resolve) => {
@@ -30,7 +30,7 @@ export function crashText(run: StrictRun): string | undefined {
 		: `Strict crashed with exit code ${run.exitCode}${run.output.trim() ? '\n' + run.output.trim() : ''}`;
 }
 
-/** One result per discovered test line from `NativeCompiler run test` output. */
+/** One result per discovered test line from `strict test` output. */
 export function testResults(source: string, uri: string, run: StrictRun): TestRunnerNotification[] {
 	const lines = run.output.split(/\r?\n/);
 	const crash = crashText(run);
@@ -57,13 +57,11 @@ export function testResults(source: string, uri: string, run: StrictRun): TestRu
 	}));
 }
 
-/** Issues printed by `NativeCompiler check` as `file: (Rule, target, message)` or `file: Rule: target`. */
+/** Issues printed by `strict check` as `file: Rule: target`. */
 export function checkIssues(output: string, root: string): CheckIssue[] {
 	return output.split(/\r?\n/).flatMap((line) => {
 		const match = issuePattern.exec(line);
-		return match
-			? [{ file: path.resolve(root, match[1]), rule: match[2] ?? match[5], target: match[3] ?? match[6], message: match[4] ?? '' }]
-			: [];
+		return match ? [{ file: path.resolve(root, match[1]), rule: match[2], target: match[3] }] : [];
 	});
 }
 

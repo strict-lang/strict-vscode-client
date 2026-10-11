@@ -107,3 +107,4 @@ dist
 *.map
 *.vsix
 strict/
+/out

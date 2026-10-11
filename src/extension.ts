@@ -5,15 +5,16 @@ import * as vscode from 'vscode';
 import { registerCodeActionProvider } from './codeActions';
 import { DecorationController, registerDecorationLifecycle, showResultCommand } from './decorations';
 import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
-import { checkIssues, crashText, dependents, issueLine, runStrict, testResults } from './nativeCompiler';
+import { checkIssues, crashText, dependents, issueLine, runStrict, StrictRun, testResults } from './nativeCompiler';
 import { compilerFile, findStrictRoot, normalizeFsPath } from './paths';
-import { isStrictBinaryPath } from './scrunchCache';
+import { hasFreshBinary, isStrictBinaryPath } from './scrunchCache';
 import { discoverStrictTests } from './scrunchDiscover';
 import { registerScrunch, ScrunchTester } from './scrunch';
 import { TestRunnerNotification } from './testResults';
 
 const notFound = `Strict not found: build ${compilerFile} in the Strict repository next to this extension or set strict.root`;
 const parallelRuns = Math.max(1, os.cpus().length - 1);
+const cachedPass: StrictRun = { exitCode: 0, output: 'All tests passed in the cached .strictbinary', durationMs: 0 };
 let output: vscode.OutputChannel;
 let extensionPath: string;
 
@@ -88,17 +89,17 @@ function runTask(definition: vscode.TaskDefinition, scope?: vscode.WorkspaceFold
 	const folder = typeof scope === 'object' ? scope.uri.fsPath : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 	const file = path.resolve(folder ?? root, String(definition.file));
 	return new vscode.Task(definition, scope ?? vscode.TaskScope.Workspace, `Run ${path.basename(file, '.strict')}`, 'Strict',
-		new vscode.ProcessExecution(path.join(root, compilerFile), ['run', path.relative(root, file), '.', ...(definition.args ?? [])], { cwd: root }));
+		new vscode.ProcessExecution(path.join(root, compilerFile), [path.relative(root, file), '.', ...(definition.args ?? [])], { cwd: root }));
 }
 
-/** Runs inline tests (`run test`) and validators (`check`) with the newest NativeCompiler, several processes at once. */
+/** Runs inline tests (`test`) and validators (`check`) with the newest strict compiler, several processes at once. */
 class NativeTester implements ScrunchTester, vscode.Disposable {
 	private readonly checks = vscode.languages.createDiagnosticCollection('strict');
 	private readonly crashes = vscode.languages.createDiagnosticCollection('strict tests');
 	private readonly files = new Set<string>();
 	private readonly queue = new Set<string>();
 	private running = 0;
-	private usedRoot = '';
+	private usedBuild = '';
 
 	constructor(private readonly report: (result: TestRunnerNotification) => void) {}
 
@@ -127,9 +128,9 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	public async run(uri: vscode.Uri, methodName: string): Promise<void> {
 		const root = strictRoot();
 		if (!root || methodName !== 'Run') {
-			throw new Error(root ? 'NativeCompiler only runs Run methods' : notFound);
+			throw new Error(root ? 'strict only runs Run methods' : notFound);
 		}
-		const result = await runStrict(root, ['run', path.relative(root, uri.fsPath), '.']);
+		const result = await runStrict(root, [path.relative(root, uri.fsPath), '.']);
 		const method = discoverStrictTests(readText(uri.fsPath)).find((item) => item.name === methodName);
 		this.report({
 			lineNumber: method?.lineNumber ?? 0, state: result.exitCode === 0 ? 1 : 0, uri: uri.toString(), methodName,
@@ -151,9 +152,11 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 
 	private next(): void {
 		const root = strictRoot();
-		if (root && root !== this.usedRoot) {
-			this.usedRoot = root;
-			output.appendLine(`Using ${path.join(root, compilerFile)}`);
+		const compiler = root ? path.join(root, compilerFile) : '';
+		const build = `${compiler} ${fs.statSync(compiler, { throwIfNoEntry: false })?.mtimeMs}`;
+		if (root && build !== this.usedBuild) {
+			this.usedBuild = build;
+			void runStrict(root, ['version']).then((version) => output.appendLine(`Using ${compiler} ${version.output.trim()}`));
 		}
 		while (root && this.running < parallelRuns && this.queue.size > 0) {
 			const entry = this.queue.values().next().value as string;
@@ -167,7 +170,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	}
 
 	private async test(root: string, file: string): Promise<void> {
-		const result = await runStrict(root, ['run', 'test', path.relative(root, file), '.']);
+		const result = hasFreshBinary(file) ? cachedPass : await runStrict(root, ['test', path.relative(root, file), '.']);
 		if (!this.files.has(file)) {
 			return;
 		}
@@ -196,8 +199,8 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		for (const [key, file] of files) {
 			const source = readText(file);
 			this.checks.set(vscode.Uri.file(file), issues.filter((issue) => normalizeFsPath(issue.file) === key).map((issue) => {
-				const diagnostic = new vscode.Diagnostic(lineRange(source, issueLine(source, issue.target)),
-					issue.message ? `${issue.target}: ${issue.message}` : issue.target, vscode.DiagnosticSeverity.Error);
+				const diagnostic = new vscode.Diagnostic(lineRange(source, issueLine(source, issue.target)), issue.target,
+					vscode.DiagnosticSeverity.Error);
 				diagnostic.code = issue.rule;
 				return polishDiagnostic(diagnostic, vscode.Uri.file(file));
 			}));
