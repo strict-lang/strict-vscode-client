@@ -13,6 +13,6 @@ vsc-extension-quickstart.md
 **/.output.txt
 out/test/**
 **/*.vsix
-package-vsix.mjs
+strict.mjs
 bun.lock
 Agents.md

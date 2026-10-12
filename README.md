@@ -1,8 +1,7 @@
 # Strict Language for VS Code
 
 Edit, test and run [Strict](https://strict-lang.org/) (`.strict`) files in Visual Studio Code. Everything runs through
-the native Strict compiler `strict.exe`, which is written in Strict and compiled by itself. No .NET,
-no language server process.
+the native Strict compiler `strict.exe`, which is written in Strict and compiled by itself.
 
 ## Features
 
@@ -35,8 +34,9 @@ strict-lang/
   strict-vscode-client/   # this extension
 ```
 
-The `.vsix` (`bun run package`) contains a copy of `strict.exe` and the base types, used only when no Strict
-repository is found. Set `strict.root` to force one folder. The **Strict** output channel logs which compiler is used
+Without a Strict repository the first `strict` on PATH is used (its folder needs the base types too), then the copy of
+`strict.exe` and the base types in the `.vsix` (`bun run package`), so the installed extension works on its own. Set
+`strict.root` to force one folder. The **Strict** output channel logs which compiler is used
 and its version (`strict version`, e.g. `1.0 2026-10-12 01:27`), again after every rebuild. `bun run compile` and
 `bun run package` print it as well.
 
@@ -75,7 +75,7 @@ All commands run with the Strict folder as working directory, so its root argume
 | --- | --- |
 | Inline tests of a file | `strict test <file> .` |
 | Validators of a folder | `strict check <folder> .` |
-| Run a program | `strict run <file> . [arguments]` |
+| Run a program | `strict <file> . [arguments]` |
 
 Agents can use the same commands to verify `.strict` changes without VS Code.
 
@@ -89,23 +89,25 @@ Agents can use the same commands to verify `.strict` changes without VS Code.
 ## Development
 
 Uses [bun](https://bun.sh/) for installing and running scripts (tsc and ESLint still run on node, they are faster
-there):
+there). Strict itself is needed too, preferably cloned next to this repository (see the
+[Strict README](https://github.com/strict-lang/Strict) for bootstrapping `strict.exe`), or any `strict` folder on PATH:
 
 ```powershell
+git clone https://github.com/strict-lang/Strict ../Strict   # then build strict.exe as its README explains
 bun install
-bun run test         # tsc, unit tests, ESLint
+bun run test         # tsc (prints which strict is used or how to get one), unit tests, ESLint
 ```
 
 Press **F5** (`Run Extension`) to open the sibling Strict repository in an Extension Development Host.
 
 - `bun run watch` — compile on change (the F5 build task)
-- `bun run package` — create a platform specific `.vsix` with a copy of `../Strict/strict.exe` and the
-  base types (`STRICT_ROOT` overrides the folder)
+- `bun run package` — create a platform specific `.vsix` with a copy of the same `strict.exe` and its base types
+  (`STRICT_ROOT` overrides the folder)
 
 ## Release Notes
 
 ### 0.1.0
 
-- Native Strict only: SCrunch tests, validator diagnostics and Run File through `strict.exe`, no .NET
+- Native Strict only: SCrunch tests, validator diagnostics and Run File through `strict` executable
 - Run File as a `strict` task, also usable in tasks.json
 - Local gutter icons for test results, quick fixes

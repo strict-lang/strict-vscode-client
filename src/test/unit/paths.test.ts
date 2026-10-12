@@ -34,11 +34,21 @@ suite('paths', () => {
 	test('findStrictRoot uses the newest Strict repository and the bundled copy only without one', () => {
 		const extension = path.join(tempRoot, 'strict-vscode-client');
 		const bundled = compilerIn(path.join(extension, 'strict'), 0);
-		assert.strictEqual(findStrictRoot(undefined, [], extension), bundled);
+		assert.strictEqual(findStrictRoot(undefined, [], extension, ''), bundled);
 		const sibling = compilerIn(path.join(tempRoot, 'Strict'), 120);
-		assert.strictEqual(findStrictRoot(undefined, [], extension), sibling);
+		assert.strictEqual(findStrictRoot(undefined, [], extension, ''), sibling);
 		const workspace = compilerIn(path.join(tempRoot, 'Work'), 60);
-		assert.strictEqual(findStrictRoot(undefined, [workspace], extension), workspace);
+		assert.strictEqual(findStrictRoot(undefined, [workspace], extension, ''), workspace);
+	});
+
+	test('findStrictRoot uses the first strict on PATH without a repository, before the bundled copy', () => {
+		const extension = path.join(tempRoot, 'strict-vscode-client');
+		compilerIn(path.join(extension, 'strict'), 0);
+		const tools = compilerIn(path.join(tempRoot, 'Tools'), 60);
+		const searchPath = [path.join(tempRoot, 'Empty'), tools, compilerIn(path.join(tempRoot, 'Later'), 0)].join(path.delimiter);
+		assert.strictEqual(findStrictRoot(undefined, [], extension, searchPath), tools);
+		const sibling = compilerIn(path.join(tempRoot, 'Strict'), 120);
+		assert.strictEqual(findStrictRoot(undefined, [], extension, searchPath), sibling);
 	});
 
 	test('findStrictRoot only uses a configured root', () => {

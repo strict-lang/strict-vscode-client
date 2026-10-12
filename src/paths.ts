@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 export const compilerFile = process.platform === 'win32' ? 'strict.exe' : 'strict';
+export const strictNotFound = `${compilerFile} not found: build it in ../Strict next to strict-vscode-client (preferred) or ` +
+	`add the folder with ${compilerFile} and the base .strict types to your PATH`;
 
 export function normalizeFsPath(filePath: string): string {
 	return filePath.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
@@ -45,12 +47,14 @@ export function defaultSearchRoots(workspaceFolders: string[] = [], extensionPat
 }
 
 /** Strict folder with the newest strict compiler (next to the base types), checked on every call so rebuilds are used at once.
- * The copy bundled in the .vsix (strict/) is only used without any repository. */
-export function findStrictRoot(configured: string | undefined, workspaceFolders: string[], extensionPath?: string): string | undefined {
+ * Without any Strict repository the first strict on PATH is used, then the copy bundled in the .vsix (strict/). */
+export function findStrictRoot(configured: string | undefined, workspaceFolders: string[], extensionPath?: string,
+	searchPath = process.env.PATH ?? ''): string | undefined {
 	if (configured?.trim()) {
 		return newestRoot([configured.trim()]);
 	}
 	return newestRoot(defaultSearchRoots(workspaceFolders, extensionPath)) ??
+		searchPath.split(path.delimiter).find((folder) => folder && newestRoot([folder])) ??
 		(extensionPath ? newestRoot([path.join(extensionPath, 'strict')]) : undefined);
 }
 

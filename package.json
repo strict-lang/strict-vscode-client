@@ -1,7 +1,7 @@
 {
   "name": "strict-language",
   "displayName": "Strict Language",
-  "description": "Language support for Strict: syntax highlighting, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler (no .NET). See https://strict-lang.org/",
+  "description": "Language support for Strict: syntax highlighting, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler. See https://strict-lang.org/",
   "version": "0.1.0",
   "publisher": "strict-lang",
   "repository": {
@@ -151,7 +151,7 @@
         "strict.root": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Strict folder containing `strict.exe` and the base `.strict` types. Empty = the newest `strict` compiler of the workspace or a sibling `Strict` repository, the copy bundled in the .vsix only without one."
+          "markdownDescription": "Strict folder containing `strict.exe` and the base `.strict` types. Empty = the newest `strict` of the workspace or a sibling `Strict` repository, else the first on PATH, else the copy bundled in the .vsix."
         }
       }
     },
@@ -177,12 +177,12 @@
     ]
   },
   "scripts": {
-    "compile": "tsc -p ./ && (../Strict/strict version || echo ../Strict/strict not found)",
+    "compile": "tsc -p ./ && bun strict.mjs",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src",
     "test:unit": "bun run compile && bun out/test/unit/runUnitTests.js",
     "test": "bun run test:unit && bun run lint",
-    "package": "bun run compile && bun package-vsix.mjs"
+    "package": "tsc -p ./ && bun strict.mjs package"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

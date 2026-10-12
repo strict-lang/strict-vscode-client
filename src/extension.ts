@@ -6,13 +6,13 @@ import { registerCodeActionProvider } from './codeActions';
 import { DecorationController, registerDecorationLifecycle, showResultCommand } from './decorations';
 import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
 import { checkIssues, crashText, dependents, issueLine, runStrict, StrictRun, testResults } from './nativeCompiler';
-import { compilerFile, findStrictRoot, normalizeFsPath } from './paths';
+import { compilerFile, findStrictRoot, normalizeFsPath, strictNotFound } from './paths';
 import { hasFreshBinary, isStrictBinaryPath } from './scrunchCache';
 import { discoverStrictTests } from './scrunchDiscover';
 import { registerScrunch, ScrunchTester } from './scrunch';
 import { TestRunnerNotification } from './testResults';
 
-const notFound = `Strict not found: build ${compilerFile} in the Strict repository next to this extension or set strict.root`;
+const notFound = `${strictNotFound} (restart VS Code after changing PATH), or set strict.root`;
 const parallelRuns = Math.max(1, os.cpus().length - 1);
 const cachedPass: StrictRun = { exitCode: 0, output: 'All tests passed in the cached .strictbinary', durationMs: 0 };
 let output: vscode.OutputChannel;

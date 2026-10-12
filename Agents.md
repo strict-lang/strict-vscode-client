@@ -80,36 +80,6 @@ Before writing any code, stop at the first rung that holds:
 - Bytecode packaging should be compact and include only actually used methods; base type entries should usually have empty method lists unless methods are called.
 - Do not ignore ToolNotFound or toolchain failures during asm/executable creation; throw immediately and do not silently ignore problems.
 
-## Repository Exploration Snapshot of the C# Version of Strict early 2026
-- Top-level repository includes core base-library `.strict` type files at root (e.g., `Boolean.strict`, `Number.strict`, `Text.strict`, `List.strict`, `Dictionary.strict`, plus `Any`, `Type`, `Iterator`, `Error`, `Method`, `App`, `System`, `Logger`, `Stacktrace`, `File`, `Directory`, `TextReader`, `TextWriter`, and related foundational types).
-- Main solution file is `Strict.sln`, coordinating many projects beyond runtime: `Strict.Bytecode`, `Strict.Compiler`, `Strict.Compiler.Assembly`, `Strict.Compiler.Cuda`, `Strict.Expressions`, `Strict.Grammar`, `Strict.Language`, `Strict.HighLevelRuntime`, `Strict.LanguageServer`, `Strict.Optimizers`, `Strict.PackageManager`, `Strict.TestRunner`, `Strict.Transpiler`, and `Strict.Validators`.
-- Primary runtime/interpreter project is `Strict/` targeting .NET 10, with key files `Runner.cs`, `Program.cs`, `VirtualMachine.cs`, `Memory.cs`, `RegisterFile.cs`, and `CallFrame.cs`.
-- `Runner.cs` is a central orchestration component (large file) handling source parsing, validation, tests, bytecode generation, optimization, execution, binary save/load, diagnostics, expression execution, and native compilation entry points.
-- Runner constructor behavior supports both `.strict` source input and `.strictbinary` precompiled bytecode input.
-- Source flow in Runner includes staged execution: parse method bodies/expressions, validate types and constants, execute inline tests, generate bytecode, optimize bytecode, and execute on VM.
-- Precompiled flow executes bytecode directly and bypasses source parse/validate/test phases.
-- Bytecode optimizer sequence currently includes five named passes: `TestCodeRemover`, `ConstantFoldingOptimizer`, `DeadStoreEliminator`, `UnreachableCodeEliminator`, and `RedundantLoadEliminator`.
-- Runner diagnostics can report stage timing and bytecode instruction reduction metrics.
-- Runner can emit native binaries by generating NASM x64 assembly and invoking platform toolchain/linker for Windows/Linux/macOS targets.
-- Runner argument handling maps CLI numeric args to `Run(numbers)` signatures and supports expression execution patterns like `TypeName(args).Method`.
-- `Program.cs` is the CLI entrypoint and supports usage with `.strict` and `.strictbinary` inputs.
-- CLI options include diagnostics, decompile mode, and explicit target platform flags (`-Windows`, `-Linux`, `-MacOS`).
-- Decompile mode in CLI can turn `.strictbinary` into partial `.strict` output for inspection.
-- `Examples/` contains 35+ sample `.strict` programs and also includes `Examples.csproj` plus transpiler-generated C# output under `csTranspilerOutput/`.
-- Notable examples include `SimpleCalculator`, `Sum`, `FizzBuzz`, `PureAdder`, and `Fibonacci`, plus additional algorithmic/domain samples (GCD, temperature conversion, linked-list analysis, instruction/processor samples, list and number utilities, etc.).
-- Example patterns cover arithmetic, list/range iteration, recursion, mutation via mutable variables, classification logic, and text output behavior.
-- `Strict.Tests/` contains focused runtime/integration tests including `RunnerTests`, VM tests, memory/call-frame tests, adder tests, and binary execution performance tests.
-- Test stack uses NUnit and includes console output capture/assertion for user-visible behavior validation.
-- Test coverage includes bytecode serialization/deserialization workflows (zip-based artifacts) and platform compilation pathways.
-- Test project targets .NET 10 and references runtime and bytecode-related projects.
-- Performance benchmarking exists in tests (BenchmarkDotNet usage noted in exploration).
-- `TestPackage.Instance` is the standard preconfigured package used in tests to preload base types and enable full type resolution/validation.
-- Base type behavior highlights: `Boolean` logical ops/conversion, `Number` arithmetic/comparison/iteration/conversions/increment-decrement, `Text` concat/search/conversion helpers, `List` structural ops/indexing/accessors/utilities, `Dictionary` key operations and duplicate-key semantics.
-- Architecture implication for future edits: preserve Runner stage boundaries and contracts across parse/validate/test/bytecode/optimize/execute.
-- Stability implication for language/runtime changes: keep root base type semantics and example program behavior consistent unless intentionally changed with matching test updates.
-- Practical testing implication: prefer extending existing `Strict.Tests` runtime patterns (console assertions, package setup, serialization checks, platform-path checks) when introducing behavior changes.
-- Repository context priority: maintain compatibility between source execution and bytecode execution paths, and keep `.strictbinary` behavior self-consistent with runtime expectations.
-
 ## Test-Driven Development (TDD)
 
 ### Overview
