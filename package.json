@@ -49,6 +49,15 @@
       {
         "command": "strict-vscode-client.scrunch.showLineTests",
         "title": "SCrunch: Show Tests for Line"
+      },
+      {
+        "command": "strict-vscode-client.scrunch.slowestTests",
+        "title": "SCrunch: Show Slowest Tests",
+        "icon": "$(watch)"
+      },
+      {
+        "command": "strict-vscode-client.scrunch.timeAll",
+        "title": "SCrunch: Time All Tests (without cache)"
       }
     ],
     "menus": {
@@ -103,6 +112,12 @@
         {
           "command": "strict-vscode-client.scrunch.showLineTests",
           "when": "resourceLangId == strict"
+        },
+        {
+          "command": "strict-vscode-client.scrunch.slowestTests"
+        },
+        {
+          "command": "strict-vscode-client.scrunch.timeAll"
         }
       ]
     },
@@ -155,6 +170,12 @@
     "configuration": {
       "title": "Strict",
       "properties": {
+        "strict.slowTestMilliseconds": {
+          "type": "number",
+          "default": 10,
+          "minimum": 0,
+          "markdownDescription": "Tests (and all tests of a method, on its header) taking at least this long show `slow: …` after the line. Most types run all their tests in under 1 ms. **SCrunch: Show Slowest Tests** lists the slowest ones."
+        },
         "strict.root": {
           "type": "string",
           "default": "",

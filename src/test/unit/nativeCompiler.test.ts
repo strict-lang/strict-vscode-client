@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { checkIssues, crashLine, dependents, testResults } from '../../nativeCompiler';
+import { checkIssues, crashLine, dependents, runProcess, testResults } from '../../nativeCompiler';
 import { hasFreshBinary } from '../../scrunchCache';
 
 const adder = [
@@ -33,6 +33,33 @@ suite('native compiler', () => {
 		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 1], [3, 0]]);
 		assert.strictEqual(results[1].actual, '5');
 		assert.strictEqual(results[1].consoleOutput, undefined);
+	});
+
+	test('runProcess streams the output and times every line', async () => {
+		const run = await runProcess(process.execPath,
+			['-e', 'console.log("first"); setTimeout(() => console.log("second"), 60)'], os.tmpdir());
+		assert.strictEqual(run.exitCode, 0);
+		assert.deepStrictEqual(run.output.split(/\r?\n/).filter(Boolean), ['first', 'second']);
+		assert.ok(run.times!.length >= 2 && run.times![1] - run.times![0] >= 40, String(run.times));
+	});
+
+	test('testResults time a test by the gap to the previous test line, the first one also compiled', () => {
+		const results = testResults(adder, 'file:///Adder.strict', {
+			exitCode: 0, durationMs: 160, times: [34, 153.5, 153.6],
+			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\n' +
+				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4\nAll tests passed in Adder.strict\n'
+		});
+		assert.deepStrictEqual(results.map((result) => result.durationMs), [undefined, 119.5]);
+	});
+
+	test('testResults take the duration Strict prints after a test', () => {
+		const results = testResults(adder, 'file:///Adder.strict', {
+			exitCode: 1, durationMs: 40,
+			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.02 ms)\n' +
+				'Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4 (12.5 ms)\n  got: 5\n1 tests failed in Adder.strict\n'
+		});
+		assert.deepStrictEqual(results.map((result) => [result.state, result.durationMs]), [[1, 0.02], [0, 12.5]]);
+		assert.strictEqual(results[1].actual, '5');
 	});
 
 	test('testResults fails every test with the exit code when Strict crashed before its summary', () => {

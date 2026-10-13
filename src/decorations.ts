@@ -6,10 +6,12 @@ import {
 	Range,
 	TextEditor,
 	TextEditorDecorationType,
+	ThemeColor,
 	Uri,
-	window
+	window,
+	workspace
 } from 'vscode';
-import { formatCoverageHover, formatInlineFailure, LineCoverageMark } from './scrunchModel';
+import { formatCoverageHover, formatInlineFailure, formatInlineSlow, LineCoverageMark } from './scrunchModel';
 
 export const showResultCommand = 'strict-vscode-client.scrunch.showResult';
 
@@ -97,7 +99,7 @@ export class DecorationController {
 				const item: DecorationOptions = {
 					range: new Range(mark.lineNumber, 0, mark.lineNumber, line.text.length),
 					hoverMessage: coverageHover(editor.document.uri, mark),
-					renderOptions: inlineFailure(mark)
+					renderOptions: inlineText(mark)
 				};
 				if (mark.kind === 'status') {
 					if (mark.failed && mark.tests.length === 0) {
@@ -148,17 +150,12 @@ function coverageHover(uri: Uri, mark: LineCoverageMark): MarkdownString {
 	return hover;
 }
 
-function inlineFailure(mark: LineCoverageMark): DecorationOptions['renderOptions'] {
-	const text = formatInlineFailure(mark);
-	if (!text) {
-		return undefined;
-	}
-	return {
-		after: {
-			contentText: `  ${text}`,
-			color: '#a9a9a9'
-		}
-	};
+function inlineText(mark: LineCoverageMark): DecorationOptions['renderOptions'] {
+	const failure = formatInlineFailure(mark);
+	const slow = formatInlineSlow(mark, workspace.getConfiguration('strict').get<number>('slowTestMilliseconds', 10));
+	const text = failure ?? slow;
+	return text ? { after: { contentText: `  ${text}`, color: failure ? '#a9a9a9' : new ThemeColor('editorWarning.foreground') } }
+		: undefined;
 }
 
 function uriKeys(uri: string): string[] {

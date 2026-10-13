@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runStrict } from './nativeCompiler';
+import { runStrict, testDuration } from './nativeCompiler';
 import { typeNameFromPath } from './scrunchDiscover';
 import { isNamed, keywords, parseType, StrictMethod, StrictType, typeNamed } from './strictIndex';
 
@@ -227,7 +227,8 @@ export function usedSiblings(file: string, source: string): string[] {
 }
 
 export function passedAll(output: string, methodName: string, testCount: number): boolean {
-	const results = output.split(/\r?\n/).map((line) => /^Test (passed|failed): .* in (\S+) at .+:line \d+$/.exec(line))
+	const results = output.split(/\r?\n/).map((line) =>
+		/^Test (passed|failed): .* in (\S+) at .+:line \d+$/.exec(line.replace(testDuration, '')))
 		.filter((result) => result?.[2] === methodName);
 	return results.length === testCount && results.every((result) => result![1] === 'passed');
 }

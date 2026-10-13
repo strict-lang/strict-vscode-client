@@ -108,3 +108,4 @@ dist
 *.vsix
 strict/
 /out
+/.claude

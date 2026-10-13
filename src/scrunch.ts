@@ -32,6 +32,7 @@ import {
 	lineCoverageMarks,
 	methodForLine,
 	shouldExecuteManual,
+	slowestTests,
 	visibleMethods
 } from './scrunchModel';
 import {
@@ -169,6 +170,22 @@ export class ScrunchController implements Disposable {
 			return;
 		}
 		await this.showTestsForLine(editor.document.uri, editor.selection.active.line);
+	}
+
+	/** The tests that took longest in their last run, picking one opens it. */
+	public async showSlowestTests(): Promise<void> {
+		const slowest = slowestTests([...this.results.values()].flatMap((byLine) => [...byLine.values()]), 100);
+		const picked = await window.showQuickPick(slowest.map((test) => ({
+			label: `${formatDuration(test.durationMs)}  ${test.expression ?? `line ${test.lineNumber + 1}`}`,
+			description: [test.typeName, test.methodName].filter(Boolean).join('.'),
+			detail: test.state === 0 ? 'failed' : undefined,
+			test
+		})), { title: 'Slowest tests', placeHolder: slowest.length > 0 ? 'Open test' : 'No timed tests yet, save a .strict file' });
+		const uri = picked?.test.uri ? this.parseUri(picked.test.uri) : undefined;
+		if (uri) {
+			const line = picked!.test.lineNumber;
+			await window.showTextDocument(uri, { selection: new Range(line, 0, line, 0) });
+		}
 	}
 
 	public async showResult(uriText: string, lineNumber: number): Promise<void> {

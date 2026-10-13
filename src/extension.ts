@@ -50,6 +50,8 @@ export function activate(context: vscode.ExtensionContext): void {
 		}),
 		vscode.commands.registerCommand('strict-vscode-client.scrunch.focus', () => scrunch.showInTesting()),
 		vscode.commands.registerCommand('strict-vscode-client.scrunch.showLineTests', () => scrunch.showLineTests()),
+		vscode.commands.registerCommand('strict-vscode-client.scrunch.slowestTests', () => scrunch.showSlowestTests()),
+		vscode.commands.registerCommand('strict-vscode-client.scrunch.timeAll', () => tester.timeAll()),
 		vscode.commands.registerCommand(showResultCommand, (uri: string, lineNumber: number) =>
 			scrunch.showResult(uri, lineNumber)),
 		vscode.workspace.onDidChangeConfiguration((event) => {
@@ -113,6 +115,12 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	public testAll(files: string[]): void {
 		files.forEach((file) => this.files.add(file));
 		this.enqueue([...new Set(files.map((file) => path.dirname(file))), ...files]);
+	}
+
+	/** Runs every test again to time it: removes the .strictbinary caches, Strict writes them again when all tests pass. */
+	public timeAll(): void {
+		this.files.forEach((file) => fs.rmSync(file.replace(/\.strict$/, '.strictbinary'), { force: true }));
+		this.testAll([...this.files]);
 	}
 
 	public changed(file: string): void {

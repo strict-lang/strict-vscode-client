@@ -118,6 +118,8 @@ suite('implementations', () => {
 	test('passedAll only when every test of the method passed', () => {
 		const passed = (line: number) => `Test passed: Temperature(30).Clamped(0, 20) is 20 in Clamped at x/Temperature.strict:line ${line}`;
 		assert.ok(passedAll(`${passed(6)}\n${passed(7)}\nAll tests passed in x/Temperature.strict`, 'Clamped', 2));
+		assert.ok(passedAll(`${passed(6)} (0.02 ms)\n${passed(7)} (97.57 ms)\nAll tests passed in x/Temperature.strict`,
+			'Clamped', 2));
 		assert.ok(!passedAll(`${passed(6)}\nAll tests passed in x/Temperature.strict`, 'Clamped', 2));
 		assert.ok(!passedAll(`${passed(6)}\nTest failed: Temperature(10).Clamped(0, 20) is 10 in Clamped at x:line 7\n  got: 0`,
 			'Clamped', 2));

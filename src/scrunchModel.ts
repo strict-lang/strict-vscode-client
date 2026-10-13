@@ -151,6 +151,17 @@ export function formatInlineFailure(mark: Pick<LineCoverageMark, 'expected' | 'a
 	return `expected ${mark.expected}  got ${mark.actual}`;
 }
 
+/** Duration of a test, or of all tests of a method on its header, from slowMs on. Failures show their discrepancy instead. */
+export function formatInlineSlow(mark: LineCoverageMark, slowMs: number): string | undefined {
+	const isTimed = mark.kind === 'status' || mark.tests.some((test) => test.lineNumber === mark.lineNumber);
+	return isTimed && !mark.failed && (mark.durationMs ?? 0) >= slowMs ? `slow: ${formatDuration(mark.durationMs)}` : undefined;
+}
+
+export function slowestTests(results: TestRunnerNotification[], limit: number): TestRunnerNotification[] {
+	return results.filter((result) => result.durationMs !== undefined)
+		.sort((left, right) => right.durationMs! - left.durationMs!).slice(0, limit);
+}
+
 function coveringTests(
 	method: DiscoveredMethod,
 	results: Map<number, TestRunnerNotification>

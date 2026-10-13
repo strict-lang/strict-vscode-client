@@ -1,10 +1,10 @@
-import { execFile } from 'child_process';
+import { spawn } from 'child_process';
 import * as path from 'path';
 import { compilerFile, normalizeFsPath } from './paths';
 import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
 import { TestRunnerNotification } from './testResults';
 
-export type StrictRun = { exitCode: number; output: string; durationMs: number };
+export type StrictRun = { exitCode: number; output: string; durationMs: number; times?: number[] };
 export type CheckIssue = { file: string; line: number; rule: string; target: string };
 
 const timeoutMs = 60000;
@@ -13,17 +13,40 @@ const failureLine = /^Test failed: (.*) in (\S+?)(?: at .+:line (\d+))?$/;
 const passedLine = /^Test passed: .* at .+:line (\d+)$/;
 const issuePattern = /^(.+?\.strict):line (\d+): (\w+): (.*)$/;
 const errorLocation = /^\w+: .* in (.+?\.strict):(\d+)/m;
+export const testDuration = / \((\d+(?:\.\d+)?) ms\)$/;
 
 /** Runs root/strict with root as working directory, root arguments are always ".". */
 export function runStrict(root: string, args: string[]): Promise<StrictRun> {
-	const started = Date.now();
+	return runProcess(path.join(root, compilerFile), args, root);
+}
+
+/** Runs file, times[i] is when output line i arrived in ms since the start (stdout streams while tests run). */
+export function runProcess(file: string, args: string[], cwd: string): Promise<StrictRun> {
+	const started = performance.now();
 	return new Promise((resolve) => {
-		execFile(path.join(root, compilerFile), args, { cwd: root, timeout: timeoutMs, windowsHide: true, maxBuffer: 1 << 26 },
-			(error, stdout, stderr) => {
-				const exitCode = !error ? 0 : typeof error.code === 'number' ? error.code : -1;
-				const failure = exitCode !== -1 ? '' : error?.killed ? `Timed out after ${timeoutMs / 1000} s` : error?.message ?? '';
-				resolve({ exitCode, output: stdout + stderr + failure, durationMs: Date.now() - started });
-			});
+		const child = spawn(file, args, { cwd, windowsHide: true });
+		const times: number[] = [];
+		let stdout = '';
+		let stderr = '';
+		let failure = '';
+		const timer = setTimeout(() => {
+			failure = `Timed out after ${timeoutMs / 1000} s`;
+			child.kill();
+		}, timeoutMs);
+		child.stdout.setEncoding('utf8').on('data', (text: string) => {
+			const now = performance.now() - started;
+			stdout += text;
+			for (let index = text.indexOf('\n'); index >= 0; index = text.indexOf('\n', index + 1)) {
+				times.push(now);
+			}
+		});
+		child.stderr.setEncoding('utf8').on('data', (text: string) => stderr += text);
+		child.on('error', (error) => failure = error.message);
+		child.on('close', (code) => {
+			clearTimeout(timer);
+			resolve({ exitCode: failure || code === null ? -1 : code, output: stdout + stderr + failure,
+				durationMs: performance.now() - started, times });
+		});
 	});
 }
 
@@ -41,11 +64,22 @@ export function crashLine(output: string, file: string, root: string): number | 
 
 /** One result per discovered test line from `strict test` output. */
 export function testResults(source: string, uri: string, run: StrictRun): TestRunnerNotification[] {
-	const lines = run.output.split(/\r?\n/);
+	const printed = run.output.split(/\r?\n/).map((line) => testDuration.exec(line)?.[1]);
+	const lines = run.output.split(/\r?\n/).map((line) => line.replace(testDuration, ''));
 	const crash = crashText(run);
 	const consoleOutput = lines.filter((line) => line && !/^Test (passed|failed): /.test(line) &&
 		!line.startsWith('  got: ') && !summaryLine.test(line)).join('\n') || undefined;
-	const passed = new Set(lines.flatMap((line) => passedLine.exec(line)?.[1] ?? []).map((line) => Number(line) - 1));
+	const testLines = lines.flatMap((line, index) => /^Test (passed|failed): /.test(line) ? [index] : []);
+	// ponytail: without a printed duration a test takes the gap since the previous test line, the first one also compiled
+	const durationOf = (index: number) => {
+		const previous = testLines[testLines.indexOf(index) - 1];
+		return printed[index] !== undefined ? Number(printed[index]) : index >= 0 && previous !== undefined &&
+			run.times?.[index] !== undefined ? run.times[index] - run.times[previous] : undefined;
+	};
+	const passed = new Map(lines.flatMap((line, index) => {
+		const match = passedLine.exec(line);
+		return match ? [[Number(match[1]) - 1, index]] : [];
+	}));
 	const failures = lines.flatMap((line, index) => {
 		const match = failureLine.exec(line);
 		return match ? [{ index, expression: match[1], method: match[2], line: match[3] ? Number(match[3]) - 1 : undefined }] : [];
@@ -62,6 +96,7 @@ export function testResults(source: string, uri: string, run: StrictRun): TestRu
 		return {
 			lineNumber: test.lineNumber, state: crashed || failed >= 0 ? 0 : 1, uri, methodName: method.name,
 			expression: test.expression, expected, actual, consoleOutput,
+			durationMs: durationOf(failed >= 0 ? failed : passed.get(test.lineNumber) ?? -1),
 			message: crashed ? crash : failed < 0 ? undefined : actual === undefined ? lines[failed] : `Expected ${expected}, got ${actual}`
 		};
 	}));

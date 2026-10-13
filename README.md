@@ -28,6 +28,10 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
   its type, directly or through other types. A file whose `.strictbinary` is not older than its source counts as
   passed without running anything: Strict only writes it when all tests passed.
 - **Inline test dots** — green/red gutter marks on tests and covered lines, `expected … got …` after a failing `is` test.
+- **Test timings** — every test shows how long it took (hover, Testing view, method and type totals). Tests and methods
+  from `strict.slowTestMilliseconds` (10 ms) on show `slow: 238ms` after the line, **SCrunch: Show Slowest Tests** lists
+  the slowest of the last runs and opens one. **SCrunch: Time All Tests** removes the `.strictbinary` caches and runs
+  everything again, so all tests are timed once.
 - **Testing view** — type → methods with tests. Refresh re-tests the whole workspace. `Run` methods without tests are
   run on request (Run Manual profile) and show their output.
 - **Validator diagnostics** — `strict check` runs over the folder of every tested file (unused members,
@@ -75,6 +79,7 @@ you start often, add a `strict` task to `.vscode/tasks.json` and use **Tasks: Ru
 | Setting | Meaning |
 | --- | --- |
 | `strict.root` | Strict folder with `strict.exe` and the base types. Empty = newest found (see above) |
+| `strict.slowTestMilliseconds` | Tests and methods taking at least this long are marked slow (default 10) |
 
 ## Commands
 
@@ -84,6 +89,8 @@ you start often, add a `strict` task to `.vscode/tasks.json` and use **Tasks: Ru
 | `Strict: Run File with Arguments...` | — | Same, asks for arguments passed to `Run` |
 | `Show in Testing window` | — | Focus the Testing view (SCrunch tree) |
 | `SCrunch: Show Tests for Line` | — | List tests that covered the current line and show that result |
+| `SCrunch: Show Slowest Tests` | — | List the slowest tests of the last runs, open the picked one |
+| `SCrunch: Time All Tests (without cache)` | — | Remove the `.strictbinary` caches and run every test again to time it |
 
 ## What the extension calls
 
@@ -107,7 +114,10 @@ Agents can use the same commands to verify `.strict` changes without VS Code.
   weak tests let a wrong call pass: add a test that tells them apart.
 - `strict test` parses every `.strict` file of the folder, one file that does not parse fails the others too. A method
   with only test lines makes `strict` exit with 127 without output, it is shown as a crash on the first line.
-- Only `Run` methods can be executed, there are no per-test durations.
+- Only `Run` methods can be executed.
+- Test durations are the gaps between the streamed `Test passed` lines until Strict prints them itself: the first test
+  of a file has none (its gap includes compiling), tests of a file with an up-to-date `.strictbinary` are not run, so not
+  timed (**Time All Tests** runs them).
 
 ## Development
 
