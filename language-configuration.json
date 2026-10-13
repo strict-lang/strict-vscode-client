@@ -17,7 +17,7 @@
 		["\"", "\""]
 	],
 	"indentationRules": {
-		"increaseIndentPattern": "^\\s*(if|else|for|has|constant|mutable|method|factory|generic|implement)\\b.*$",
+		"increaseIndentPattern": "^(?!(has|constant|mutable|implement)\\b)(?![^\\s(]+(\\([^)]*\\))? = )\\S.*$|^\\s+(if|else|for)\\b.*$",
 		"decreaseIndentPattern": "^\\s*(else)\\b.*$"
 	},
 	"wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",

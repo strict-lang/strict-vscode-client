@@ -1,7 +1,7 @@
 {
   "name": "strict-language",
   "displayName": "Strict Language",
-  "description": "Language support for Strict: syntax highlighting, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler. See https://strict-lang.org/",
+  "description": "Language support for Strict: completion, hover, go to definition, implementations suggested from your tests, errors for methods that already exist, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler. See https://strict-lang.org/",
   "version": "0.1.0",
   "publisher": "strict-lang",
   "repository": {
@@ -143,6 +143,13 @@
     "configurationDefaults": {
       "explorer.fileNesting.patterns": {
         "*.strict": "${capture}.strictbinary"
+      },
+      "[strict]": {
+        "editor.insertSpaces": false,
+        "editor.detectIndentation": false,
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": false,
+        "files.trimFinalNewlines": true
       }
     },
     "configuration": {

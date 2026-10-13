@@ -5,7 +5,24 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
 
 ## Features
 
-- **Syntax highlighting** for `.strict` files
+- **Syntax highlighting** for `.strict` files, tabs, trimmed lines and indentation after method headers, `if`, `else`
+  and `for` set up for `.strict` files.
+- **Completion** — after a dot the members and methods of the value's type (`vector.Normalize.`, `"hi".`, `numbers(0).`,
+  types of members, parameters, locals, loop variables and return types are followed), otherwise parameters, locals,
+  members, keywords and every type of the workspace and the Strict folder (`has ` offers `logger`, `number`, ...).
+  Methods insert their required arguments and show their header and tests: the tests are the documentation.
+- **Hover**, **Go to Definition** (`F12`), **Signature Help** (`(` and `,`), **Outline** and **Go to Symbol in
+  Workspace** (`Ctrl+T`) over all `.strict` types, including `Math`, `NeuralNetworks` and the base types.
+- **Implementation from tests** — write a method header and its tests, press Enter after the last test: the empty line
+  shows an implementation as ghost text (`Tab` accepts, `Alt+]` shows the next). Calls of existing methods with the same
+  name or the same test values come first, then calls on parameters and members returning the right type and
+  operators between them. Every suggestion passed all tests of the method on the Strict VM (`strict test` on a
+  temporary copy, about 40 ms each).
+- **No reinvented wheels** — a method that an existing method of another type already does is an error
+  (`MethodAlreadyExists`): either its body copies one (same code with other names), or a call of an existing method with
+  the same name or the same test values passes all its tests, e.g. writing `Clamped` on a type with `has celsius Number`
+  next to `Number.Clamp`. The quick fix replaces the implementation with that call, the related information links the
+  existing method.
 - **SCrunch** — every `.strict` file in the workspace is tested when the folder opens (`strict test`, the
   inline tests on the Strict VM). Saving a file (also outside VS Code) re-tests it first, then every file that mentions
   its type, directly or through other types. A file whose `.strictbinary` is not older than its source counts as
@@ -14,9 +31,10 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
 - **Testing view** — type → methods with tests. Refresh re-tests the whole workspace. `Run` methods without tests are
   run on request (Run Manual profile) and show their output.
 - **Validator diagnostics** — `strict check` runs over the folder of every tested file (unused members,
-  parameters and variables, line and method limits, tab indentation). Crashes of Strict while testing a file (for now
-  also parse errors) are shown on its first line.
-- **Quick fixes** — lightbulb / **Alt+Enter** for `ExtraWhitespacesFoundAtBeginningOfLine` and similar.
+  parameters and variables, line and method limits, tab indentation). Errors Strict reports while testing a file
+  (`ParsingFailed`, `TypeNotFound`, ...) are shown on the line it names, crashes on the first line.
+- **Quick fixes** — lightbulb / **Alt+Enter** for `ExtraWhitespacesFoundAtBeginningOfLine`, `MethodAlreadyExists` and
+  similar.
 - **Strict: Run File** (`Ctrl+Shift+R`, play button in the editor title) runs the file's `Run` method in a terminal.
   **Strict: Run File with Arguments...** passes arguments to `Run(numbers)` style methods.
 
@@ -76,14 +94,19 @@ All commands run with the Strict folder as working directory, so its root argume
 | Inline tests of a file | `strict test <file> .` |
 | Validators of a folder | `strict check <folder> .` |
 | Run a program | `strict <file> . [arguments]` |
+| Verify a suggested or existing implementation | `strict test <temporary copy of the file> .` |
 
 Agents can use the same commands to verify `.strict` changes without VS Code.
 
 ## Known limitations
 
-- No autocomplete, hover or go to definition until Strict has its own language server.
-- Strict reports no line numbers for validator issues: a name is shown on the first line containing it.
-- Parse errors currently crash `strict`, the crash diagnostic shows its exit code and output.
+- Completion, hover and go to definition read the method headers and members of the `.strict` files themselves until
+  Strict has its own language server: types are followed through members, parameters, locals and return types only,
+  an unknown receiver lists the methods of all types.
+- Suggestions and `MethodAlreadyExists` try one level of calls and operators (32 at most, one `strict` process each),
+  weak tests let a wrong call pass: add a test that tells them apart.
+- `strict test` parses every `.strict` file of the folder, one file that does not parse fails the others too. A method
+  with only test lines makes `strict` exit with 127 without output, it is shown as a crash on the first line.
 - Only `Run` methods can be executed, there are no per-test durations.
 
 ## Development

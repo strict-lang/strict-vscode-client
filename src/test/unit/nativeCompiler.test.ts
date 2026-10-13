@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { checkIssues, dependents, issueLine, testResults } from '../../nativeCompiler';
+import { checkIssues, crashLine, dependents, testResults } from '../../nativeCompiler';
 import { hasFreshBinary } from '../../scrunchCache';
 
 const adder = [
@@ -25,30 +25,50 @@ suite('native compiler', () => {
 		assert.strictEqual(results[0].methodName, 'Add');
 	});
 
+	test('testResults maps a failure with its location to the test on that line', () => {
+		const results = testResults(adder, 'file:///Adder.strict', {
+			exitCode: 1, durationMs: 30,
+			output: 'Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4\n  got: 5\n1 tests failed in Adder.strict\n'
+		});
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 1], [3, 0]]);
+		assert.strictEqual(results[1].actual, '5');
+		assert.strictEqual(results[1].consoleOutput, undefined);
+	});
+
 	test('testResults fails every test with the exit code when Strict crashed before its summary', () => {
 		const results = testResults(adder, 'file:///Adder.strict', { exitCode: 3221225477, durationMs: 30, output: '' });
 		assert.deepStrictEqual(results.map((result) => result.state), [0, 0]);
 		assert.ok(results[0].message?.includes('3221225477'));
 	});
 
-	test('checkIssues reads file, rule and target of each issue line', () => {
-		const issues = checkIssues([
-			'Examples\\Bad.strict: ExtraWhitespacesFoundAtBeginningOfLine: line 4',
-			'Examples/Bad.strict: UnusedMemberMustBeRemoved: logger',
-			'Validation issues: 2'
-		].join('\n'), 'C:\\Strict');
-		assert.deepStrictEqual(issues.map((issue) => [issue.rule, issue.target]), [
-			['ExtraWhitespacesFoundAtBeginningOfLine', 'line 4'],
-			['UnusedMemberMustBeRemoved', 'logger']
-		]);
-		assert.strictEqual(issues[0].file, path.resolve('C:\\Strict', 'Examples', 'Bad.strict'));
+	test('testResults keeps the tests that passed before Strict crashed', () => {
+		const results = testResults(adder, 'file:///Adder.strict', {
+			exitCode: 3221225477, durationMs: 30, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\n'
+		});
+		assert.deepStrictEqual(results.map((result) => result.state), [1, 0]);
+		assert.strictEqual(results[0].message, undefined);
+		assert.strictEqual(results[0].consoleOutput, undefined);
+		assert.ok(results[1].message?.includes('3221225477'));
 	});
 
-	test('issueLine maps line numbers and names to zero based lines', () => {
-		assert.strictEqual(issueLine(adder, 'line 4'), 3);
-		assert.strictEqual(issueLine(adder, 'logger'), 0);
-		assert.strictEqual(issueLine(adder, 'second'), 1);
-		assert.strictEqual(issueLine(adder, 'missing'), 0);
+	test('crashLine is the zero based line of an error Strict reports in the tested file', () => {
+		const file = path.resolve('C:\\Strict', 'Examples', 'Bad.strict');
+		assert.strictEqual(crashLine('ParsingFailed: number +* minimum in Examples/Bad.strict:5', file, 'C:\\Strict'), 4);
+		assert.strictEqual(crashLine(`TypeNotFound: Foo used in ${file}:4 is not in this folder`, file, 'C:\\Strict'), 3);
+		assert.strictEqual(crashLine('MethodNotFound: Number.Foo used in Examples/Other.strict:2', file, 'C:\\Strict'), undefined);
+	});
+
+	test('checkIssues reads file, zero based line, rule and target of each issue line', () => {
+		const issues = checkIssues([
+			'Examples\\Bad.strict:line 4: ExtraWhitespacesFoundAtBeginningOfLine: indent with tabs',
+			'Examples/Bad.strict:line 1: UnusedMemberMustBeRemoved: logger',
+			'Validation issues: 2'
+		].join('\n'), 'C:\\Strict');
+		assert.deepStrictEqual(issues.map((issue) => [issue.line, issue.rule, issue.target]), [
+			[3, 'ExtraWhitespacesFoundAtBeginningOfLine', 'indent with tabs'],
+			[0, 'UnusedMemberMustBeRemoved', 'logger']
+		]);
+		assert.strictEqual(issues[0].file, path.resolve('C:\\Strict', 'Examples', 'Bad.strict'));
 	});
 
 	test('dependents follow type names transitively and skip unrelated files', () => {

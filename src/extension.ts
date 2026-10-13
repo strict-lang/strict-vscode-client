@@ -5,7 +5,8 @@ import * as vscode from 'vscode';
 import { registerCodeActionProvider } from './codeActions';
 import { DecorationController, registerDecorationLifecycle, showResultCommand } from './decorations';
 import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
-import { checkIssues, crashText, dependents, issueLine, runStrict, StrictRun, testResults } from './nativeCompiler';
+import { StrictLanguage } from './language';
+import { checkIssues, crashLine, crashText, dependents, runStrict, StrictRun, testResults } from './nativeCompiler';
 import { compilerFile, findStrictRoot, normalizeFsPath, strictNotFound } from './paths';
 import { hasFreshBinary, isStrictBinaryPath } from './scrunchCache';
 import { discoverStrictTests } from './scrunchDiscover';
@@ -30,6 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		void vscode.window.showWarningMessage(notFound);
 	}
 	context.subscriptions.push(output, tester, scrunch, new DiagnosticHighlighter(), registerCodeActionProvider(),
+		new StrictLanguage(strictRoot),
 		vscode.window.registerFileDecorationProvider({
 			provideFileDecoration: (uri) => isStrictBinaryPath(uri.fsPath)
 				? { color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground'), tooltip: 'Cached compiled bytecode' }
@@ -177,7 +179,8 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		const uri = vscode.Uri.file(file);
 		const source = readText(file);
 		const crash = crashText(result);
-		this.crashes.set(uri, crash ? [new vscode.Diagnostic(lineRange(source, 0), crash, vscode.DiagnosticSeverity.Error)] : []);
+		this.crashes.set(uri, crash ? [new vscode.Diagnostic(lineRange(source, crashLine(result.output, file, root) ?? 0), crash,
+			vscode.DiagnosticSeverity.Error)] : []);
 		if (crash) {
 			output.appendLine(`${file}: ${crash}`);
 		}
@@ -199,7 +202,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		for (const [key, file] of files) {
 			const source = readText(file);
 			this.checks.set(vscode.Uri.file(file), issues.filter((issue) => normalizeFsPath(issue.file) === key).map((issue) => {
-				const diagnostic = new vscode.Diagnostic(lineRange(source, issueLine(source, issue.target)), issue.target,
+				const diagnostic = new vscode.Diagnostic(lineRange(source, issue.line), issue.target,
 					vscode.DiagnosticSeverity.Error);
 				diagnostic.code = issue.rule;
 				return polishDiagnostic(diagnostic, vscode.Uri.file(file));

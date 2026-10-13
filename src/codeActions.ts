@@ -10,6 +10,8 @@ import {
 } from 'vscode';
 import { diagnosticCode } from './diagnostics';
 import { strictDocumentSelector } from './paths';
+import { alreadyExists } from './language';
+import { parseType } from './strictIndex';
 
 export const strictCodeActionProvider: CodeActionProvider = {
 	provideCodeActions(document, _range, context) {
@@ -39,6 +41,8 @@ export function createFix(document: TextDocument, diagnostic: Diagnostic): CodeA
 			return trimEndAction(document, diagnostic);
 		case 'ExtraWhitespacesFoundAtBeginningOfLine':
 			return fixLeadingWhitespaceAction(document, diagnostic);
+		case alreadyExists:
+			return useExistingAction(document, diagnostic);
 		default:
 			return undefined;
 	}
@@ -123,6 +127,25 @@ function fixLeadingWhitespaceAction(
 	const edit = new WorkspaceEdit();
 	edit.replace(document.uri, new Range(line, 0, line, text.length), fixed);
 	const action = new CodeAction('Fix leading whitespace (use tabs)', CodeActionKind.QuickFix);
+	action.diagnostics = [diagnostic];
+	action.isPreferred = true;
+	action.edit = edit;
+	return action;
+}
+
+/** Replaces the implementation with the call of the existing method named in the diagnostic, its tests stay. */
+function useExistingAction(document: TextDocument, diagnostic: Diagnostic): CodeAction | undefined {
+	const call = /^[^`]*`([^`]+)` passes/.exec(diagnostic.message)?.[1];
+	const method = parseType(document.fileName, document.getText()).methods.find((candidate) =>
+		candidate.line === diagnostic.range.start.line);
+	if (!call || !method || method.implementation.length === 0) {
+		return undefined;
+	}
+	const start = method.line + 1 + method.tests.length;
+	const end = start + method.implementation.length - 1;
+	const edit = new WorkspaceEdit();
+	edit.replace(document.uri, new Range(start, 0, end, document.lineAt(end).text.length), `\t${call}`);
+	const action = new CodeAction(`Use ${call}`, CodeActionKind.QuickFix);
 	action.diagnostics = [diagnostic];
 	action.isPreferred = true;
 	action.edit = edit;
