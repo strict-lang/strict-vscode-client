@@ -5,7 +5,7 @@ import { formatDuration, parseDiscrepancy, parseStackFrames, TestRunnerNotificat
 export type LineCoverageMark = {
 	lineNumber: number;
 	failed: boolean;
-	kind: 'status' | 'coverage';
+	kind: 'status' | 'test' | 'coverage';
 	tests: TestRunnerNotification[];
 	callCount?: number;
 	/** How often and how long the last coverage run executed this line, durationMs is its time then. */
@@ -109,7 +109,7 @@ export function lineCoverageMarks(
 			const own = results.get(test.lineNumber);
 			const lineTests = own ? [own] : tests;
 			const discrepancy = own ? discrepancyOf(own) : undefined;
-			paint(marks, test.lineNumber, 'coverage', lineTests,
+			paint(marks, test.lineNumber, 'test', lineTests,
 				(own ? own.state === 0 : failed) || errorLines.has(test.lineNumber), {
 					durationMs: own?.durationMs ?? totalDuration(lineTests),
 					previousMs: own?.previousMs,
@@ -299,7 +299,7 @@ function discrepancyOf(test: TestRunnerNotification): { expected: string; actual
 function paint(
 	marks: Map<number, LineCoverageMark>,
 	lineNumber: number,
-	kind: 'status' | 'coverage',
+	kind: LineCoverageMark['kind'],
 	tests: TestRunnerNotification[],
 	failed: boolean,
 	extra: Partial<LineCoverageMark>

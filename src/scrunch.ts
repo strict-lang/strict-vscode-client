@@ -84,7 +84,9 @@ export class ScrunchController implements Disposable {
 	private readonly results = new Map<string, Map<number, TestRunnerNotification>>();
 	private readonly methods = new Map<string, DiscoveredMethod[]>();
 	private publishTimer: ReturnType<typeof setTimeout> | undefined;
-	private lastPublishKey = '';
+	/** Fingerprints of the results each file was last published with, only changed files are published again. */
+	private readonly published = new Map<string, string>();
+	private publishedRuns = 0;
 	/** What git ignores per workspace folder (uri), a file counts for the innermost folder holding it. */
 	private ignored = new Map<string, Set<string>>();
 	private userRunDepth = 0;
@@ -197,7 +199,7 @@ export class ScrunchController implements Disposable {
 
 	/** Publishes everything again, for example after strict.slowTestMilliseconds changed. */
 	public republish(): void {
-		this.lastPublishKey = '';
+		this.published.clear();
 		this.queuePublish();
 	}
 
@@ -397,7 +399,7 @@ export class ScrunchController implements Disposable {
 	}
 
 	private invalidate(uri: Uri): void {
-		this.lastPublishKey = '';
+		this.published.delete(keyOf(uri));
 		this.results.delete(keyOf(uri));
 		const fileItem = this.findFileItem(uri);
 		if (fileItem) {
@@ -456,20 +458,24 @@ export class ScrunchController implements Disposable {
 		for (const key of this.methods.keys()) {
 			this.refreshCoverage(Uri.file(key));
 		}
-		const fingerprint = publishFingerprint(this.results) + errorFingerprint();
-		if (fingerprint === this.lastPublishKey) {
-			return;
+		// ponytail: VS Code keeps 128 results, a file published only long ago would lose its states, so all are published again
+		if (++this.publishedRuns > 100) {
+			this.publishedRuns = 0;
+			this.published.clear();
 		}
-		this.lastPublishKey = fingerprint;
-		const run = this.controller.createTestRun(new TestRunRequest(undefined, undefined, undefined, false, true),
-			'Types', false);
+		const request = new TestRunRequest(undefined, undefined, undefined, false, true);
+		const runs: TestRun[] = [];
 		const printed = new Set<string>();
 		for (const key of this.methods.keys()) {
 			const fileItem = this.findFileItem(Uri.file(key));
-			if (!fileItem?.uri) {
+			const fingerprint = this.fingerprint(key);
+			if (!fileItem?.uri || !this.results.get(key)?.size || this.published.get(key) === fingerprint) {
 				continue;
 			}
+			this.published.set(key, fingerprint);
 			const uri = fileItem.uri;
+			const run = this.controller.createTestRun(request, fileItem.label, false);
+			runs.push(run);
 			this.dropUnknownMethods(uri, fileItem);
 			const byLine = this.results.get(key) ?? new Map();
 			const discovered = this.methods.get(key) ?? [];
@@ -482,7 +488,11 @@ export class ScrunchController implements Disposable {
 				}
 			}
 		}
-		run.end();
+		runs.forEach((run) => run.end());
+	}
+
+	private fingerprint(key: string): string {
+		return publishFingerprint(this.results.get(key)) + (this.findFileItem(Uri.file(key))?.error ?? '');
 	}
 
 	/** Publishes the result of method, its output unless printed has it, see unprintedOutput. */
@@ -499,7 +509,7 @@ export class ScrunchController implements Disposable {
 			: summary.cached ? 'cached' : undefined;
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
 		this.appendMethodOutput(run, uri, methodItem, method.lineNumber, summary,
-			unprintedOutput(methodOutput(summary), keyOf(uri), printed));
+			unprintedOutput(methodOutput(summary), keyOf(uri), printed, this.where(uri)));
 		methodItem.tags = isManualMethod(method) ? [this.manualTag] : (durationMs ?? 0) >= slowTestMilliseconds()
 			? [this.slowTag] : [];
 		if (summary.failed) {
@@ -510,11 +520,10 @@ export class ScrunchController implements Disposable {
 		run.passed(methodItem, durationMs);
 	}
 
-	/** methodLine of item, a link relative to its workspace folder (the cwd of the test output), then output if any. */
+	/** methodLine of item after its header, then output if any. */
 	private appendMethodOutput(run: TestRun, uri: Uri, item: TestItem, line: number, summary: MethodSummary,
 		output: string | undefined): void {
-		const place = `${workspace.asRelativePath(uri, false)}:${line + 1}`;
-		const text = [methodLine(item.label, summary.failed, summary.hasDuration ? summary.duration : undefined, place), output]
+		const text = [methodLine(summary.failed, summary.hasDuration ? summary.duration : undefined), output]
 			.filter(Boolean).join('\n');
 		run.appendOutput(text.replace(/\n/g, '\r\n') + '\r\n', new Location(uri, new Position(line, 0)), item);
 	}
@@ -603,35 +612,43 @@ export class ScrunchController implements Disposable {
 		await commands.executeCommand('workbench.panel.testResults.view.focus');
 	}
 
-	/** Tests the files of the requested items again without cache (to time them), with line counts for the Coverage profile,
-	 * the Stop button kills Strict. */
+	/** Tests the files of the requested items again without cache (to time them), one result task per type, with line counts
+	 * for the Coverage profile, the Stop button kills Strict. */
 	private async onRunRequest(request: TestRunRequest, token: CancellationToken): Promise<void> {
 		const items = itemsIn(request, this.controller);
-		const run = this.controller.createTestRun(request, 'SCrunch', true);
+		const runs = new Map<string, TestRun>();
+		const runOf = (uri?: Uri): TestRun => {
+			const file = uri?.fsPath ?? '';
+			if (!runs.has(file)) {
+				runs.set(file, this.controller.createTestRun(request, uri ? typeNameFromPath(file) : 'SCrunch', true));
+			}
+			return runs.get(file)!;
+		};
 		const abort = new AbortController();
 		const cancelled = token.onCancellationRequested(() => abort.abort());
 		this.userRunDepth += 1;
 		try {
 			const tested = items.filter((item) => this.methodOfItem(item)?.tests.length);
-			tested.forEach((item) => run.started(item));
+			tested.forEach((item) => runOf(item.uri).started(item));
 			const files = [...new Set(tested.map((item) => item.uri!.fsPath))];
 			const isCoverage = request.profile?.kind === TestRunProfileKind.Coverage;
 			await this.tester.retest(files, abort.signal, isCoverage);
 			for (const item of items) {
 				if (token.isCancellationRequested) {
-					run.skipped(item);
+					runOf(item.uri).skipped(item);
 				} else {
-					await this.runOne(run, request, item, abort.signal);
+					await this.runOne(runOf(item.uri), request, item, abort.signal);
 				}
 			}
 			if (isCoverage && !token.isCancellationRequested) {
-				files.forEach((file) => this.addCoverage(run, Uri.file(file)));
+				files.forEach((file) => this.addCoverage(runOf(Uri.file(file)), Uri.file(file)));
 			}
+			files.forEach((file) => this.published.set(keyOf(Uri.file(file)), this.fingerprint(keyOf(Uri.file(file)))));
 		} finally {
 			cancelled.dispose();
 			this.userRunDepth -= 1;
-			run.end();
-			this.republish();
+			runs.forEach((run) => run.end());
+			this.queuePublish();
 		}
 		const first = items.find((item) => item.uri);
 		if (first?.uri) {
@@ -749,7 +766,7 @@ export class ScrunchController implements Disposable {
 		item.description = summary.failed
 			? formatErrorSummary(primary.message)
 			: undefined;
-		this.appendMethodOutput(run, uri, item, method.lineNumber, summary, formatMethodOutput(methodOutput(summary)));
+		this.appendMethodOutput(run, uri, item, method.lineNumber, summary, formatMethodOutput(methodOutput(summary), this.where(uri)));
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
 		if (summary.failed) {
 			const failed = all.filter((message) => message.state === 0);
@@ -818,6 +835,11 @@ export class ScrunchController implements Disposable {
 		} catch {
 			return undefined;
 		}
+	}
+
+	/** Stack frame files printed by Strict as full paths, the test output links them. */
+	private where(uri: Uri): (file: string) => string {
+		return (file) => this.fileUri(file, uri).fsPath;
 	}
 
 	private fileUri(filePath: string, uri: Uri): Uri {
@@ -895,23 +917,9 @@ function blockingErrors(uri: Uri): Diagnostic[] {
 		.flatMap((other) => testErrors(languages.getDiagnostics(other)));
 }
 
-function errorFingerprint(): string {
-	return workspace.textDocuments.flatMap((document) => testErrors(languages.getDiagnostics(document.uri)).map((diagnostic) =>
-		document.uri.fsPath + ':' + diagnostic.message)).sort().join('|');
-}
-
-function publishFingerprint(results: Map<string, Map<number, TestRunnerNotification>>): string {
-	const parts: string[] = [];
-	for (const [key, byLine] of results) {
-		for (const [line, message] of byLine) {
-			parts.push([
-				key, line, message.state, message.cached ? 1 : 0,
-				message.durationMs ?? '', message.details ?? '', message.consoleOutput ?? '',
-				message.expected ?? '', message.actual ?? ''
-			].join(':'));
-		}
-	}
-	return parts.sort().join('|');
+function publishFingerprint(byLine = new Map<number, TestRunnerNotification>()): string {
+	return [...byLine].map(([line, message]) => [line, message.state, message.cached ? 1 : 0, message.durationMs ?? '',
+		message.details ?? '', message.consoleOutput ?? '', message.expected ?? '', message.actual ?? ''].join(':')).sort().join('|');
 }
 
 function itemsIn(request: TestRunRequest, controller: TestController): TestItem[] {

@@ -53,9 +53,9 @@ export function formatDuration(durationMs: number | undefined): string | undefin
 	return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
-/** One line per method in the test output, place (path:line) is a link in it, a cached result has no time. */
-export function methodLine(name: string, failed: boolean, durationMs: number | undefined, place: string): string {
-	return `${failed ? '✗' : '✓'} ${name} ${formatDuration(durationMs) ?? 'cached'} at ${place}`;
+/** One line per method shown after its header in the editor, a cached result has no time. */
+export function methodLine(failed: boolean, durationMs: number | undefined): string {
+	return `${failed ? '✗' : '✓'} ${formatDuration(durationMs) ?? 'cached'}`;
 }
 
 export function parseStackFrames(text: string | undefined): StackFrame[] {
@@ -146,8 +146,9 @@ export function formatErrorSummary(message: string | undefined): string | undefi
 
 /** formatMethodOutput of a method of file unless printed has it: a crash once for all files (every type using the broken one
  * stops with it), what a type printed once per file, every failed comparison. */
-export function unprintedOutput(output: MethodOutput, file: string, printed: Set<string>): string | undefined {
-	const text = formatMethodOutput(output);
+export function unprintedOutput(output: MethodOutput, file: string, printed: Set<string>,
+	where?: (file: string) => string): string | undefined {
+	const text = formatMethodOutput(output, where);
 	const key = output.expected !== undefined ? undefined : output.failed ? text : `${file}\n${text}`;
 	if (!text || key !== undefined && printed.has(key)) {
 		return undefined;
@@ -158,8 +159,9 @@ export function unprintedOutput(output: MethodOutput, file: string, printed: Set
 	return text;
 }
 
-/** What the tests of a method printed and why they failed, nothing for a silent pass (durations are in the Testing view). */
-export function formatMethodOutput(output: MethodOutput): string {
+/** What the tests of a method printed and why they failed, nothing for a silent pass (durations are in the Testing view),
+ * stack frames as `where(file):line` links. */
+export function formatMethodOutput(output: MethodOutput, where = (file: string) => file): string {
 	const lines: string[] = [];
 	const consoleText = output.consoleOutput?.replace(/\r\n/g, '\n').trim();
 	if (consoleText) {
@@ -181,7 +183,7 @@ export function formatMethodOutput(output: MethodOutput): string {
 		if (frames.length > 0) {
 			lines.push('');
 			for (const frame of frames) {
-				lines.push(`at ${frame.label} in ${frame.file}:line ${frame.line}`);
+				lines.push(`at ${frame.label} in ${where(frame.file)}:${frame.line}`);
 			}
 		} else if (output.stackTrace) {
 			lines.push('');

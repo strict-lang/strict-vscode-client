@@ -31,7 +31,8 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
   it read changed) and reports it as passed, the Testing view shows `cached` then. Only the lines Strict reports are
   tests: a line it did not print is no test (also not a passed one). The status bar shows the passed, failed and slow
   tests and spins while Strict runs, errors of `strict test` (parse errors, unknown types) mark the type as errored.
-- **Inline test dots** — green/red gutter marks on tests and covered lines, `expected … got …` after a failing `is` test.
+- **Inline test marks** — ✓/✗ in the gutter on test lines, green/red dots on covered implementation lines, `expected … got …`
+  after a failing `is` test, `✓ 20us` after each method header.
 - **Test timings** — every test shows how long it took (Strict prints it, `(0.02 ms)`): in the hover and in the Testing
   view, which sums methods and types (`…` > Sort by Duration, View as List). Tests and methods from
   `strict.slowTestMilliseconds` (10 ms) on show `slow: 238ms` after the line and get the `slow` tag (filter the Testing
@@ -48,8 +49,9 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
   the methods the line calls, self does not). The counts stay until the type is tested again. Native times are faster
   than usual, they are not remembered for `slow: … (was …)`, a failed native build keeps the last results.
 - **Testing view** — package folder → type → methods with tests. Refresh re-tests the whole workspace. `Run` methods
-  without tests are run on request (Run Manual profile) and show their output. Test Results lists every method flat (VS
-  Code does), with its type and package in grey; selecting one shows `✓ Name 0.3ms at Folder/Type.strict:6`, a link.
+  without tests are run on request (Run Manual profile) and show their output. Test Results groups methods by type, only
+  types whose results changed are published again (VS Code shows the type and package of each method in grey, durations
+  are in the Testing view), stack frames in the output are clickable `file:line` links.
 - **Generated files hidden** — `files.exclude` defaults hide `.strictbinary`, and `.test`, `.exe`, `.mlir`, `.ll` next
   to their `.strict` file. Builds without extension (Linux) nest under it with `explorer.fileNesting.enabled`.
 - **Validator diagnostics** — `strict check` runs over the folder of every tested file (unused members,

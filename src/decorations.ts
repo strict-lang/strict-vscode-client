@@ -18,6 +18,8 @@ export const showResultCommand = 'strict-vscode-client.scrunch.showResult';
 export class DecorationController {
 	private readonly passType: TextEditorDecorationType;
 	private readonly failType: TextEditorDecorationType;
+	private readonly testPassType: TextEditorDecorationType;
+	private readonly testFailType: TextEditorDecorationType;
 	private readonly statusFailType: TextEditorDecorationType;
 	private readonly statusHoverType: TextEditorDecorationType;
 	private readonly marksByUri = new Map<string, Map<number, LineCoverageMark>>();
@@ -31,6 +33,14 @@ export class DecorationController {
 			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-fail.svg')),
 			gutterIconSize: 'contain'
 		});
+		this.testPassType = window.createTextEditorDecorationType({
+			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-line-pass.svg')),
+			gutterIconSize: 'contain'
+		});
+		this.testFailType = window.createTextEditorDecorationType({
+			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-line-fail.svg')),
+			gutterIconSize: 'contain'
+		});
 		this.statusFailType = window.createTextEditorDecorationType({
 			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-fail.svg')),
 			gutterIconSize: 'contain'
@@ -41,6 +51,8 @@ export class DecorationController {
 	public dispose(): void {
 		this.passType.dispose();
 		this.failType.dispose();
+		this.testPassType.dispose();
+		this.testFailType.dispose();
 		this.statusFailType.dispose();
 		this.statusHoverType.dispose();
 		this.marksByUri.clear();
@@ -84,6 +96,8 @@ export class DecorationController {
 		const byLine = this.marksForUri(editor.document.uri.toString());
 		const passed: DecorationOptions[] = [];
 		const failed: DecorationOptions[] = [];
+		const testPassed: DecorationOptions[] = [];
+		const testFailed: DecorationOptions[] = [];
 		const statusFailed: DecorationOptions[] = [];
 		const statusHover: DecorationOptions[] = [];
 		if (byLine) {
@@ -105,11 +119,13 @@ export class DecorationController {
 					}
 					continue;
 				}
-				(mark.failed ? failed : passed).push(item);
+				(mark.kind === 'test' ? mark.failed ? testFailed : testPassed : mark.failed ? failed : passed).push(item);
 			}
 		}
 		setDecorations(editor, this.passType, passed);
 		setDecorations(editor, this.failType, failed);
+		setDecorations(editor, this.testPassType, testPassed);
+		setDecorations(editor, this.testFailType, testFailed);
 		setDecorations(editor, this.statusFailType, statusFailed);
 		setDecorations(editor, this.statusHoverType, statusHover);
 	}

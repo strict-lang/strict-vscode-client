@@ -278,7 +278,7 @@ suite('scrunch format', () => {
 			actual: '"Hello"',
 			stackTrace: 'at TextHelper.Greet in C:\\repo\\TextHelper.strict:line 3',
 			failed: true
-		}), 'Expected: "Hello, yo!"\nActual: "Hello"\n\nat TextHelper.Greet in C:\\repo\\TextHelper.strict:line 3');
+		}), 'Expected: "Hello, yo!"\nActual: "Hello"\n\nat TextHelper.Greet in C:\\repo\\TextHelper.strict:3');
 	});
 
 	test('formatErrorSummary is a short human name, not a type path', () => {
@@ -304,10 +304,8 @@ suite('scrunch format', () => {
 			[true, false, true, false, true, true, true]);
 	});
 
-	test('methodLine shows how a method did, its time and where it is', () => {
-		assert.deepStrictEqual([methodLine('Process', false, 0.3, 'ImageProcessing/AdjustBrightness.strict:6'),
-			methodLine('Run', true, undefined, 'Sum.strict:2')],
-			['✓ Process 0.3ms at ImageProcessing/AdjustBrightness.strict:6', '✗ Run cached at Sum.strict:2']);
+	test('methodLine shows how a method did and its time', () => {
+		assert.deepStrictEqual([methodLine(false, 0.3), methodLine(true, undefined)], ['✓ 0.3ms', '✗ cached']);
 	});
 
 	test('formatMethodOutput shows console text when the test printed something', () => {
@@ -349,7 +347,7 @@ suite('scrunch coverage', () => {
 		assert.strictEqual(methodLine?.kind, 'status');
 		assert.strictEqual(methodLine?.failed, false);
 		const firstTest = marks.find((mark) => mark.lineNumber === 2);
-		assert.strictEqual(firstTest?.kind, 'coverage');
+		assert.strictEqual(firstTest?.kind, 'test');
 		assert.ok(formatCoverageHover(firstTest!).includes('<1us'));
 		assert.ok(!formatCoverageHover(firstTest!).includes('Click to run'));
 		const impl = marks.find((mark) => mark.lineNumber === 4);
@@ -377,7 +375,7 @@ suite('scrunch coverage', () => {
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 0)?.kind, 'status');
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 0)?.failed, true);
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1)?.failed, true);
-		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1)?.kind, 'coverage');
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1)?.kind, 'test');
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.failed, false);
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.kind, 'coverage');
 		assert.strictEqual(formatInlineFailure(marks.find((mark) => mark.lineNumber === 1)!),
