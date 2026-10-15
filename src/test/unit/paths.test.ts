@@ -7,7 +7,10 @@ import {
 	findStrictRoot,
 	newestExistingFile,
 	normalizeFsPath,
-	strictDocumentSelector
+	projectFolder,
+	resolveIn,
+	strictDocumentSelector,
+	strictRoots
 } from '../../paths';
 
 suite('paths', () => {
@@ -80,5 +83,39 @@ suite('paths', () => {
 		for (const selector of strictDocumentSelector) {
 			assert.ok(selector.scheme, JSON.stringify(selector));
 		}
+	});
+
+	test('strictRoots are the configured folder, repositories, PATH and the bundled copy that have strict, each once', () => {
+		const extension = path.join(tempRoot, 'strict-vscode-client');
+		const bundled = compilerIn(path.join(extension, 'strict'), 0);
+		const sibling = compilerIn(path.join(tempRoot, 'Strict'), 0);
+		const tools = compilerIn(path.join(tempRoot, 'Tools'), 0);
+		const configured = compilerIn(path.join(tempRoot, 'Configured'), 0);
+		const searchPath = [path.join(tempRoot, 'Empty'), tools, sibling + path.sep].join(path.delimiter);
+		assert.deepStrictEqual(strictRoots(configured, [], extension, searchPath), [configured, sibling, tools, bundled]);
+	});
+
+	test('projectFolder is the repository of a file or folder, else the workspace folder holding it, else its own folder', () => {
+		const repository = path.join(tempRoot, 'DeltaEngine');
+		fs.mkdirSync(path.join(repository, '.git'), { recursive: true });
+		const games = path.join(repository, 'Games');
+		assert.strictEqual(projectFolder(path.join(games, 'WebWars', 'Scene.strict'), [games]), repository);
+		assert.strictEqual(projectFolder(repository, []), repository);
+		const plain = path.join(tempRoot, 'Plain');
+		assert.strictEqual(projectFolder(path.join(plain, 'Shapes', 'Square.strict'), [tempRoot, plain]), plain);
+		assert.strictEqual(projectFolder(path.join(plain, 'Square.strict'), []), plain);
+	});
+
+	test('resolveIn resolves a path Strict printed against the first folder that has it, else against the first folder', () => {
+		const fonts = path.join(tempRoot, 'DeltaEngine', 'Fonts');
+		const strict = path.join(tempRoot, 'Strict');
+		fs.mkdirSync(fonts, { recursive: true });
+		fs.mkdirSync(path.join(strict, 'Math'), { recursive: true });
+		fs.writeFileSync(path.join(fonts, 'BitmapFont.strict'), '');
+		fs.writeFileSync(path.join(strict, 'Math', 'Size.strict'), '');
+		const folders = [fonts, path.dirname(fonts), strict];
+		assert.deepStrictEqual(['BitmapFont.strict', 'Fonts/BitmapFont.strict', 'Math/Size.strict', 'Missing.strict']
+			.map((printed) => resolveIn(printed, folders)), [path.join(fonts, 'BitmapFont.strict'),
+			path.join(fonts, 'BitmapFont.strict'), path.join(strict, 'Math', 'Size.strict'), path.join(fonts, 'Missing.strict')]);
 	});
 });

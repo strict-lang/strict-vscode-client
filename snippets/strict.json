@@ -1,0 +1,83 @@
+{
+	"Method": {
+		"prefix": "method",
+		"body": [
+			"${1:Name}(${2:number} ${3:Number}) ${4:Number}",
+			"\t${5:$TM_FILENAME_BASE}(${6:1}).${1:Name}(${7:2}) is ${8:3}",
+			"\t$0"
+		],
+		"description": "Method starting with its first test, more tests follow it, then the implementation"
+	},
+	"Run": {
+		"prefix": "run",
+		"body": [
+			"has logger",
+			"Run",
+			"\tlogger.Log(${1:\"Hello\"})$0"
+		],
+		"description": "Run method logging to the console, has logger belongs to the members at the top"
+	},
+	"for": {
+		"prefix": "for",
+		"body": [
+			"for ${1:elements}",
+			"\t${0:value}"
+		],
+		"description": "Loop over a list, Range or number, value and index are the current element"
+	},
+	"if else": {
+		"prefix": "if",
+		"body": [
+			"if ${1:condition}",
+			"\t${2:return value}",
+			"else",
+			"\t${0:return other}"
+		],
+		"description": "if with else block"
+	},
+	"then else": {
+		"prefix": "then",
+		"body": [
+			"${1:condition} then ${2:value} else ${0:other}"
+		],
+		"description": "Single line conditional, like condition ? value : other"
+	},
+	"has": {
+		"prefix": "has",
+		"body": [
+			"has ${1:width} ${0:Number}"
+		],
+		"description": "Member, leave out the type when the name says it: has number, has logger"
+	},
+	"constant": {
+		"prefix": "constant",
+		"body": [
+			"constant ${1:Name} = ${0:1}"
+		],
+		"description": "Constant member or variable, computed only from constants"
+	},
+	"mutable": {
+		"prefix": "mutable",
+		"body": [
+			"mutable ${1:count} = ${0:0}"
+		],
+		"description": "Variable that really changes, like a loop counter"
+	},
+	"let": {
+		"prefix": "let",
+		"body": [
+			"let ${1:name} = ${0:value}"
+		],
+		"description": "Variable that does not change, calculated once"
+	},
+	"New type": {
+		"isFileTemplate": true,
+		"body": [
+			"has ${1:number}",
+			"${2:Doubled} ${3:Number}",
+			"\t$TM_FILENAME_BASE(${4:2}).${2:Doubled} is ${5:4}",
+			"\t${0:number * 2}"
+		],
+		"description": "New type named like its file: a member and a method starting with its first test"
+	}
+}

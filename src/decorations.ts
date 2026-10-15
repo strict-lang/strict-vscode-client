@@ -51,10 +51,9 @@ export class DecorationController {
 		for (const key of uriKeys(uri)) {
 			this.marksByUri.set(key, map);
 		}
-		const editor = window.activeTextEditor;
-		if (editor && uriKeys(editor.document.uri.toString()).some((key) => this.marksByUri.has(key))) {
-			this.refreshTests(editor);
-		}
+		const keys = uriKeys(uri);
+		window.visibleTextEditors.filter((editor) => uriKeys(editor.document.uri.toString()).some((key) => keys.includes(key)))
+			.forEach((editor) => this.refreshTests(editor));
 	}
 
 	public marksFor(uri: string, lineNumber: number): LineCoverageMark | undefined {
@@ -67,11 +66,8 @@ export class DecorationController {
 		return undefined;
 	}
 
-	public refreshActiveEditor(): void {
-		const editor = window.activeTextEditor;
-		if (editor) {
-			this.refreshTests(editor);
-		}
+	public refreshVisibleEditors(): void {
+		window.visibleTextEditors.forEach((editor) => this.refreshTests(editor));
 	}
 
 	private marksForUri(uri: string): Map<number, LineCoverageMark> | undefined {
@@ -139,7 +135,7 @@ function coverageHover(uri: Uri, mark: LineCoverageMark): MarkdownString {
 	hover.supportThemeIcons = true;
 	const text = formatCoverageHover(mark);
 	if (text) {
-		hover.appendMarkdown(text);
+		hover.appendText(text);
 	} else if (mark.failed) {
 		hover.appendMarkdown('SCrunch: error on this line');
 	}
@@ -150,9 +146,13 @@ function coverageHover(uri: Uri, mark: LineCoverageMark): MarkdownString {
 	return hover;
 }
 
+export function slowTestMilliseconds(): number {
+	return workspace.getConfiguration('strict').get<number>('slowTestMilliseconds', 10);
+}
+
 function inlineText(mark: LineCoverageMark): DecorationOptions['renderOptions'] {
 	const failure = formatInlineFailure(mark);
-	const slow = formatInlineSlow(mark, workspace.getConfiguration('strict').get<number>('slowTestMilliseconds', 10));
+	const slow = formatInlineSlow(mark, slowTestMilliseconds());
 	const text = failure ?? slow;
 	return text ? { after: { contentText: `  ${text}`, color: failure ? '#a9a9a9' : new ThemeColor('editorWarning.foreground') } }
 		: undefined;
@@ -172,9 +172,5 @@ function uriKeys(uri: string): string[] {
 
 export function registerDecorationLifecycle(context: ExtensionContext, decorations: DecorationController): void {
 	context.subscriptions.push({ dispose: () => decorations.dispose() });
-	context.subscriptions.push(window.onDidChangeActiveTextEditor((editor: TextEditor | undefined) => {
-		if (editor) {
-			decorations.refreshActiveEditor();
-		}
-	}));
+	context.subscriptions.push(window.onDidChangeVisibleTextEditors(() => decorations.refreshVisibleEditors()));
 }

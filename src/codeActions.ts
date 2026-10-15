@@ -3,157 +3,79 @@ import {
 	CodeActionKind,
 	CodeActionProvider,
 	Diagnostic,
+	Disposable,
 	languages,
+	Position,
 	Range,
 	TextDocument,
 	WorkspaceEdit
 } from 'vscode';
 import { diagnosticCode } from './diagnostics';
+import { Fix, issueTarget, ruleFix, safeFixes, typeFixes } from './fixes';
 import { strictDocumentSelector } from './paths';
-import { alreadyExists } from './language';
-import { parseType } from './strictIndex';
+import { StrictType } from './strictIndex';
+
+const fixAll = CodeActionKind.SourceFixAll.append('strict');
 
 export const strictCodeActionProvider: CodeActionProvider = {
 	provideCodeActions(document, _range, context) {
 		if (document.languageId !== 'strict') {
 			return [];
 		}
-		const actions: CodeAction[] = [];
-		for (const diagnostic of context.diagnostics) {
-			const fix = createFix(document, diagnostic);
-			if (fix) {
-				actions.push(fix);
-			}
+		if (context.only && fixAll.intersects(context.only)) {
+			return fixAllActions(document);
 		}
-		return actions;
+		const lines = context.diagnostics.length > 0 ? document.getText().split(/\r?\n/) : [];
+		return context.diagnostics.flatMap((diagnostic) => {
+			const rule = diagnosticCode(diagnostic);
+			const fix = rule && ruleFix(rule, lines, diagnostic.range.start.line, issueTarget(diagnostic.message));
+			return fix ? [toAction(document, fix, diagnostic)] : [];
+		});
 	}
 };
 
-export function createFix(document: TextDocument, diagnostic: Diagnostic): CodeAction | undefined {
-	const code = diagnosticCode(diagnostic);
-	if (!code) {
-		return undefined;
-	}
-	switch (code) {
-		case 'EmptyLineIsNotAllowed':
-			return deleteLineAction(document, diagnostic, 'Remove empty line');
-		case 'ExtraWhitespacesFoundAtEndOfLine':
-			return trimEndAction(document, diagnostic);
-		case 'ExtraWhitespacesFoundAtBeginningOfLine':
-			return fixLeadingWhitespaceAction(document, diagnostic);
-		case alreadyExists:
-			return useExistingAction(document, diagnostic);
-		default:
-			return undefined;
-	}
-}
-
-function deleteLineAction(
-	document: TextDocument,
-	diagnostic: Diagnostic,
-	title: string
-): CodeAction | undefined {
-	const line = diagnostic.range.start.line;
-	if (line < 0 || line >= document.lineCount) {
-		return undefined;
-	}
-	const edit = new WorkspaceEdit();
-	if (line + 1 < document.lineCount) {
-		edit.delete(document.uri, new Range(line, 0, line + 1, 0));
-	} else if (line > 0) {
-		const previous = document.lineAt(line - 1);
-		const current = document.lineAt(line);
-		edit.delete(
-			document.uri,
-			new Range(line - 1, previous.text.length, line, current.text.length)
-		);
-	} else {
-		edit.delete(document.uri, document.lineAt(line).range);
-	}
-	const action = new CodeAction(title, CodeActionKind.QuickFix);
-	action.diagnostics = [diagnostic];
-	action.isPreferred = true;
-	action.edit = edit;
-	return action;
-}
-
-function trimEndAction(document: TextDocument, diagnostic: Diagnostic): CodeAction | undefined {
-	const line = diagnostic.range.start.line;
-	if (line < 0 || line >= document.lineCount) {
-		return undefined;
-	}
-	const text = document.lineAt(line).text;
-	const trimmed = text.trimEnd();
-	if (trimmed.length === text.length) {
-		return undefined;
-	}
-	const edit = new WorkspaceEdit();
-	edit.replace(document.uri, new Range(line, 0, line, text.length), trimmed);
-	const action = new CodeAction('Remove trailing whitespace', CodeActionKind.QuickFix);
-	action.diagnostics = [diagnostic];
-	action.isPreferred = true;
-	action.edit = edit;
-	return action;
-}
-
-function fixLeadingWhitespaceAction(
-	document: TextDocument,
-	diagnostic: Diagnostic
-): CodeAction | undefined {
-	const line = diagnostic.range.start.line;
-	if (line < 0 || line >= document.lineCount) {
-		return undefined;
-	}
-	const text = document.lineAt(line).text;
-	let index = 0;
-	let tabCount = 0;
-	while (index < text.length && (text[index] === '\t' || text[index] === ' ')) {
-		if (text[index] === '\t') {
-			tabCount++;
-			index++;
-			continue;
-		}
-		let spaces = 0;
-		while (index < text.length && text[index] === ' ') {
-			spaces++;
-			index++;
-		}
-		tabCount += Math.max(1, Math.floor(spaces / 4));
-	}
-	const fixed = '\t'.repeat(tabCount) + text.slice(index).trimEnd();
-	if (fixed === text) {
-		return undefined;
-	}
-	const edit = new WorkspaceEdit();
-	edit.replace(document.uri, new Range(line, 0, line, text.length), fixed);
-	const action = new CodeAction('Fix leading whitespace (use tabs)', CodeActionKind.QuickFix);
-	action.diagnostics = [diagnostic];
-	action.isPreferred = true;
-	action.edit = edit;
-	return action;
-}
-
-/** Replaces the implementation with the call of the existing method named in the diagnostic, its tests stay. */
-function useExistingAction(document: TextDocument, diagnostic: Diagnostic): CodeAction | undefined {
-	const call = /^[^`]*`([^`]+)` passes/.exec(diagnostic.message)?.[1];
-	const method = parseType(document.fileName, document.getText()).methods.find((candidate) =>
-		candidate.line === diagnostic.range.start.line);
-	if (!call || !method || method.implementation.length === 0) {
-		return undefined;
-	}
-	const start = method.line + 1 + method.tests.length;
-	const end = start + method.implementation.length - 1;
-	const edit = new WorkspaceEdit();
-	edit.replace(document.uri, new Range(start, 0, end, document.lineAt(end).text.length), `\t${call}`);
-	const action = new CodeAction(`Use ${call}`, CodeActionKind.QuickFix);
-	action.diagnostics = [diagnostic];
-	action.isPreferred = true;
-	action.edit = edit;
-	return action;
-}
-
-export function registerCodeActionProvider(): ReturnType<typeof languages.registerCodeActionsProvider> {
-	return languages.registerCodeActionsProvider(strictDocumentSelector, strictCodeActionProvider, {
-		providedCodeActionKinds: [CodeActionKind.QuickFix]
+/** Fix All (`source.fixAll.strict`, e.g. in editor.codeActionsOnSave): the safe fixes of every issue in the document. */
+function fixAllActions(document: TextDocument): CodeAction[] {
+	const issues = languages.getDiagnostics(document.uri).flatMap((diagnostic) => {
+		const rule = diagnosticCode(diagnostic);
+		return rule ? [{ rule, line: diagnostic.range.start.line, target: issueTarget(diagnostic.message) }] : [];
 	});
+	const edits = safeFixes(document.getText().split(/\r?\n/), issues);
+	return edits.length > 0 ? [toAction(document, { title: 'Fix all safe Strict issues', edits }, undefined, fixAll)] : [];
+}
+
+function toAction(document: TextDocument, fix: Fix, diagnostic: Diagnostic | undefined, kind = CodeActionKind.QuickFix,
+	isPreferred = true): CodeAction {
+	const action = new CodeAction(fix.title, kind);
+	const edit = new WorkspaceEdit();
+	for (const change of fix.edits) {
+		edit.replace(document.uri, new Range(...change.range), change.text);
+	}
+	action.edit = edit;
+	action.diagnostics = diagnostic && [diagnostic];
+	action.isPreferred = isPreferred;
+	action.command = fix.rename && { command: 'editor.action.rename', title: fix.title,
+		arguments: [[document.uri, new Position(...fix.rename)]] };
+	return action;
+}
+
+/** Quick fixes for the rules `strict check` reports and Fix All, naming fixes start the rename of navigation.ts. */
+export function registerCodeActionProvider(): Disposable {
+	return languages.registerCodeActionsProvider(strictDocumentSelector, strictCodeActionProvider, {
+		providedCodeActionKinds: [CodeActionKind.QuickFix, fixAll]
+	});
+}
+
+/** Did you mean for names Strict did not find and the call of a method `strict check` reports as copied, both need all
+ * types: index gives the parsed document and every type of the workspace and the Strict folder. */
+export function registerTypeFixes(index: (document: TextDocument) => { own: StrictType; types: StrictType[] }): Disposable {
+	return languages.registerCodeActionsProvider(strictDocumentSelector, {
+		provideCodeActions(document, _range, context) {
+			const lines = context.diagnostics.length > 0 ? document.getText().split(/\r?\n/) : [];
+			let types: ReturnType<typeof index> | undefined;
+			return context.diagnostics.flatMap((diagnostic) => typeFixes(diagnostic.message, diagnosticCode(diagnostic), lines,
+				diagnostic.range.start.line, () => types ??= index(document)).map((fix, at) =>
+				toAction(document, fix, diagnostic, CodeActionKind.QuickFix, at === 0)));
+		}
+	}, { providedCodeActionKinds: [CodeActionKind.QuickFix] });
 }

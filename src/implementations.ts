@@ -1,11 +1,16 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { runStrict, testDuration } from './nativeCompiler';
-import { typeNameFromPath } from './scrunchDiscover';
-import { isNamed, keywords, parseType, StrictMethod, StrictType, typeNamed } from './strictIndex';
+import { crashText, runStrict, StrictRun, testDuration, testResults } from './nativeCompiler';
+import { strictPath } from './paths';
+import { isTest, typeNameFromPath } from './scrunchDiscover';
+import {
+	isNamed, isTrait, keywords, parseType, resolve, Resolved, Scope, StrictMethod, StrictType, typeNamed
+} from './strictIndex';
 
 export type ExistingCall = { owner: StrictType; method: StrictMethod; call?: string };
+export type SharedRun = { bodies: Promise<string[]>; waiting: Array<() => boolean> };
+export type Evaluation = { value?: string; error?: string };
 type Value = { name: string; type: string };
 
 const tokenPattern = /"(?:[^"\\]|\\.)*"|\d+(?:\.\d+)?|[A-Za-z_]\w*|\S/g;
@@ -31,7 +36,8 @@ export function copiedFrom(method: StrictMethod, own: StrictType, types: StrictT
 				const counterpart = (name: string): string | undefined => copy.names[original.names.indexOf(name)];
 				const has = type.members.filter((member) => member.text.startsWith('has '));
 				const receiver = original.names.includes('value') ? counterpart('value') : has.length === 1 &&
-					original.names.includes(has[0].name) ? counterpart(has[0].name) : hasMembers(type) ? undefined : type.name;
+					original.names.includes(has[0].name) ? `${type.name}(${counterpart(has[0].name)})` : hasMembers(type) ? undefined
+					: type.name;
 				const names = existing.parameters.map((parameter) => counterpart(parameter.name));
 				while (names.length > 0 && names[names.length - 1] === undefined && existing.parameters[names.length - 1].optional) {
 					names.pop();
@@ -68,13 +74,15 @@ function normalized(method: StrictMethod, typeNames: Set<string>): { tokens: str
 	return body;
 }
 
+// ponytail: test lines like scrunchDiscover finds them, a one-line body starting with a bracket using members like
+// `(id > 0) and (name is not "")` still reads as tests; upgrade: the test lines from Strict
 /** All lines of a method without implementation yet are its tests, otherwise undefined. */
 export function pendingTests(method: StrictMethod): string[] | undefined {
-	const isTest = (line: string) => /^\t[^\t]/.test(line) && !implementationStart.test(line.trim()) && !/\bthen\b/.test(line) &&
+	const isPending = (line: string) => /^\t[^\t]/.test(line) && isTest(line.trim()) && !/\bthen\b/.test(line) &&
 		/\bis\b|[<>]/.test(line) && !['value', ...method.parameters.map((parameter) => parameter.name)].some((name) =>
 		new RegExp(`\\b${name}\\b`).test(line));
 	const tests = [...method.tests, ...method.implementation.map((line) => line.slice(1))];
-	return tests.length > 0 && method.implementation.every(isTest) ? tests : undefined;
+	return tests.length > 0 && method.implementation.every(isPending) ? tests : undefined;
 }
 
 /** Calls of existing methods (outside own) returning the same type and doing what method does: its copied body, then the
@@ -175,7 +183,7 @@ function hasMembers(type: StrictType): boolean {
 	return type.members.some((member) => !member.text.startsWith('constant '));
 }
 
-function sameType(first: string, second: string): boolean {
+export function sameType(first: string, second: string): boolean {
 	return first !== '' && normalizedType(first) === normalizedType(second);
 }
 
@@ -207,6 +215,84 @@ export function withImplementation(source: string, method: StrictMethod, body: s
 		...(index === method.line ? [...tests.map((test) => `\t${test}`), `\t${body}`] : [])]).join('\n');
 }
 
+/** Left side of a test line ending in `is` or `is ?`, still waiting for its expected value, otherwise undefined. */
+export function unfinishedTest(line: string): string | undefined {
+	const left = /^\t(\S.*?) is(?: \?)?\s*$/.exec(line)?.[1];
+	return left && !implementationStart.test(left) ? left : undefined;
+}
+
+/** Copy of source with `expression is <placeholder fitting resolved>` as the first test of method (`is ()` crashes Strict,
+ * lists take `(0)`), for texts `expression is Error` next (Strict prints both alike after got:), unfinished tests and other
+ * methods without implementation are left out: Strict can not run them. */
+export function withEvaluation(source: string, method: StrictMethod, expression: string, resolved?: Resolved):
+	{ text: string; test: string; errorTest?: string } {
+	const name = resolved?.type.name;
+	const test = `${grouped(expression)} is ${name === 'Text' ? '""' : name === 'Boolean' ? 'true' : name === 'List' ? '(0)' : '0'}`;
+	const errorTest = name === 'Text' ? `${grouped(expression)} is Error` : undefined;
+	const text = withImplementation(source, method, method.implementation.join('\n').slice(1),
+		[test, ...errorTest ? [errorTest] : [], ...method.tests]);
+	return { text: text.split('\n').filter((line) => unfinishedTest(line) === undefined).join('\n'), test, errorTest };
+}
+
+/** expression in brackets when its outermost operator is and, or, xor or then: they bind weaker than is, a bracketed value
+ * is a list. */
+export function grouped(expression: string): string {
+	return / (and|or|xor|then) /.test(outermost(expression)) ? `(${expression})` : expression;
+}
+
+/** Type of the value of expression: Boolean for outermost comparisons, and, or, xor and not, X for `to X`, the then value of
+ * a conditional, else what resolve finds. */
+export function evaluatedType(expression: string, scope: Scope): Resolved | undefined {
+	const outer = outermost(expression);
+	const then = / then (.+?) else /.exec(outer);
+	const to = / to (\S+)$/.exec(outer);
+	return then ? evaluatedType(expression.slice(then.index + 6, then.index + 6 + then[1].length), scope)
+		: /^not | (is|and|or|xor) |[<>]/.test(outer) ? typeNamed('Boolean', scope.types)
+		: to ? typeNamed(expression.slice(to.index + 4), scope.types) : resolve(expression, scope);
+}
+
+/** expression with its texts and bracketed parts blanked, positions kept: what is left are its outermost operators. */
+function outermost(expression: string): string {
+	const blank = (part: string) => '_'.repeat(part.length);
+	const blanked = expression.replace(/"(?:[^"\\]|\\.)*"/g, blank).replace(/\([^()]*\)/g, blank);
+	return blanked === expression ? expression : outermost(blanked);
+}
+
+// ponytail: quotes texts by the type evaluatedType finds, an untyped `name + "s"` stays unquoted and texts with ", " in a
+// list split; upgrade: Strict prints values as code
+/** Value of the left side of the evaluation test as Strict code from `strict test` of its text: printed after `got:` when it
+ * failed (`Error: X` as `Error("X")` unless the text failed its errorTest), the placeholder when it passed, else the first
+ * error Strict reports, located by file name only. */
+export function evaluated(evaluation: { text: string; test: string; errorTest?: string }, run: StrictRun, resolved?: Resolved):
+	Evaluation {
+	const results = testResults(evaluation.text, '', run);
+	const result = results.find((candidate) => candidate.expression === evaluation.test);
+	const isText = results.find((candidate) => candidate.expression === evaluation.errorTest)?.state === 0;
+	const quoted = (value: string) => `"${value.replace(/[\\"]/g, '\\$&')}"`;
+	const failure = isText ? undefined : /^Error: (.+)$/.exec(result?.actual ?? '')?.[1];
+	if (failure !== undefined) {
+		return { value: `Error(${quoted(failure)})` };
+	}
+	if (result?.actual !== undefined) {
+		return { value: resolved?.type.name === 'Text' ? quoted(result.actual) : resolved?.element === 'Text' &&
+			/^\(.+\)$/.test(result.actual) ? `(${result.actual.slice(1, -1).split(', ').map(quoted).join(', ')})` : result.actual };
+	}
+	const passed = result && run.output.split(/\r?\n/).some((line) => line.startsWith('Test passed: ') &&
+		line.replace(testDuration, '').endsWith(`:line ${result.lineNumber + 1}`));
+	const error = result?.consoleOutput ?? crashText(run) ?? result?.message ?? `Strict did not run ${evaluation.test}`;
+	return passed ? { value: evaluation.test.slice(evaluation.test.lastIndexOf(' is ') + 4) }
+		: { error: error.split('\n')[0].replace(/ in \S*?([^\\/\s]+\.strict):\d+$/, ' in $1') };
+}
+
+/** Value of expression in the context of method, evaluated as its first test on a temporary copy of file with source, run in
+ * project, the project folder of file. */
+export async function evaluate(root: string, project: string, file: string, source: string, method: StrictMethod,
+	expression: string, resolved?: Resolved): Promise<Evaluation> {
+	const evaluation = withEvaluation(source, method, expression, resolved);
+	return evaluated(evaluation, await withTemporaryCopy(file, [evaluation.text], (copy) =>
+		testCopy(root, project, copy, evaluation.text)), resolved);
+}
+
 // ponytail: finds types by their names (`has board`, `Cells`), may take a few unused ones along; upgrade: dependencies from Strict
 /** Files of the types in the folder of file that source uses directly or through them, `strict` parses every file it copies. */
 export function usedSiblings(file: string, source: string): string[] {
@@ -233,34 +319,69 @@ export function passedAll(output: string, methodName: string, testCount: number)
 	return results.length === testCount && results.every((result) => result![1] === 'passed');
 }
 
-// ponytail: one strict process per body in a temporary copy (40 ms each for small types), sibling types outside the Strict
-// folder are copied flat (no sub folders of a project); upgrade: verify all bodies in one strict process
-/** Bodies for method that pass all its tests on the Strict VM, in the order given. */
-export async function passingBodies(root: string, file: string, source: string, method: StrictMethod, bodies: string[],
-	isCancelled = () => false): Promise<string[]> {
+// ponytail: one strict process per body in a temporary copy (40 ms each for small types); upgrade: verify all bodies in one
+// strict process
+/** Bodies for method that pass all its tests on the Strict VM, in the order given, run in project like evaluate. */
+export async function passingBodies(root: string, project: string, file: string, source: string, method: StrictMethod,
+	bodies: string[], isCancelled = () => false): Promise<string[]> {
 	const tests = pendingTests(method) ?? method.tests;
-	const relative = path.relative(root, path.dirname(file));
-	const siblings = relative.startsWith('..') || path.isAbsolute(relative) ? usedSiblings(file, source) : [];
 	const passed = new Set<string>();
 	let next = 0;
-	await Promise.all(Array.from({ length: Math.min(parallelRuns, bodies.length) }, async () => {
-		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-'));
-		const copy = path.join(folder, path.basename(file));
-		try {
-			for (const sibling of siblings) {
-				fs.copyFileSync(path.join(path.dirname(file), sibling), path.join(folder, sibling));
-			}
+	await Promise.all(Array.from({ length: Math.min(parallelRuns, bodies.length) }, () =>
+		withTemporaryCopy(file, [source, ...bodies], async (copy) => {
 			while (next < bodies.length && !isCancelled()) {
 				const body = bodies[next++];
-				fs.writeFileSync(copy, withImplementation(source, method, body, tests));
-				fs.rmSync(copy.replace(/\.strict$/, '.strictbinary'), { force: true });
-				if (passedAll((await runStrict(root, ['test', copy, '.'])).output, method.name, tests.length)) {
+				if (passedAll((await testCopy(root, project, copy, withImplementation(source, method, body, tests))).output,
+					method.name, tests.length)) {
 					passed.add(body);
 				}
 			}
-		} finally {
-			fs.rmSync(folder, { recursive: true, force: true });
-		}
-	}));
+		})));
 	return bodies.filter((body) => passed.has(body));
+}
+
+/** The run of key in runs for one more caller, started anew when there is none or every caller waiting for it is cancelled:
+ * then it stops starting `strict` and is not kept, so a cancelled run never counts as one without passing bodies. */
+export function sharedRun(runs: Map<string, SharedRun>, key: string, isCancelled: () => boolean,
+	start: (isCancelled: () => boolean) => Promise<string[]>): Promise<string[]> {
+	const cancelled = (waiting: Array<() => boolean>) => waiting.every((waiter) => waiter());
+	const cached = runs.get(key);
+	if (cached && !cancelled(cached.waiting)) {
+		cached.waiting.push(isCancelled);
+		return cached.bodies;
+	}
+	const waiting = [isCancelled];
+	const run = { bodies: start(() => cancelled(waiting)), waiting };
+	const forget = () => runs.get(key) === run && runs.delete(key);
+	run.bodies.then(() => cancelled(waiting) && forget(), forget);
+	runs.set(key, run);
+	return run.bodies;
+}
+
+// ponytail: a copy outside the project, Strict finds the other types from the project folder it runs in; upgrade: Strict tests a text
+/** Calls use with the path for a copy of file in a new temporary folder, next to copies of the sibling types any of texts uses
+ * (they win over namesakes elsewhere like for file), no native traits (their code is next to them) or base types (the copies
+ * would replace them), the folder is removed afterwards. */
+export async function withTemporaryCopy<T>(file: string, texts: string[], use: (copy: string) => Promise<T>): Promise<T> {
+	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-'));
+	const source = path.dirname(file);
+	try {
+		const native = fs.existsSync(path.join(source, 'native'));
+		for (const sibling of fs.existsSync(path.join(source, 'Any.strict')) ? [] : usedSiblings(file, texts.join('\n'))) {
+			const text = fs.readFileSync(path.join(source, sibling), 'utf8');
+			if (!native || !isTrait(parseType(sibling, text))) {
+				fs.writeFileSync(path.join(folder, sibling), text);
+			}
+		}
+		return await use(path.join(folder, path.basename(file)));
+	} finally {
+		fs.rmSync(folder, { recursive: true, force: true });
+	}
+}
+
+/** `strict test` of text written to copy, run in project with copy relative to it like NativeTester. */
+export function testCopy(root: string, project: string, copy: string, text: string): Promise<StrictRun> {
+	fs.writeFileSync(copy, text);
+	fs.rmSync(copy.replace(/\.strict$/, '.strictbinary'), { force: true });
+	return runStrict(root, ['test', strictPath(project, copy)], { cwd: project });
 }

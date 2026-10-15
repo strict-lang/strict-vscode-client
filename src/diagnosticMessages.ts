@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
 /**
  * Humanize PascalCase / camelCase error codes: EmptyLineIsNotAllowed → "Empty line is not allowed"
  */
@@ -115,6 +118,17 @@ export function formatDiagnosticMessage(code: string | undefined, message: strin
 		return body;
 	}
 	return `${body}\n${stack}`;
+}
+
+/** File and zero based line in folder (Strict's Validators) first quoting rule, where Strict reports it. */
+export function ruleSource(rule: string, folder: string): { file: string; line: number } | undefined {
+	try {
+		return fs.readdirSync(folder).filter((name) => name.endsWith('.strict')).map((name) => path.join(folder, name)).map((file) =>
+			({ file, line: fs.readFileSync(file, 'utf8').split(/\r?\n/).findIndex((text) => text.includes(`"${rule}"`)) }))
+			.find((source) => source.line >= 0);
+	} catch {
+		return undefined;
+	}
 }
 
 export function extractStackText(message: string): string {

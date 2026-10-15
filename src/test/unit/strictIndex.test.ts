@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { callBefore, chainBefore, membersOf, parseType, resolve, scopeAt } from '../../strictIndex';
+import { callBefore, chainBefore, isTrait, membersOf, parseType, resolve, scopeAt } from '../../strictIndex';
 
 export const number = parseType('C:/Strict/Number.strict', [
 	'has iterator',
@@ -22,8 +22,8 @@ export const number = parseType('C:/Strict/Number.strict', [
 	'\tvalue + other'
 ].join('\n'));
 export const text = parseType('C:/Strict/Text.strict', ['has characters', 'Length Number', '\t"ab".Length is 2', '\t2'].join('\n'));
-export const list = parseType('C:/Strict/List.strict',
-	['has elements', 'First Generic', '\t(1, 2).First is 1', '\telements(0)'].join('\n'));
+export const list = parseType('C:/Strict/List.strict', ['has elements', 'First Generic', '\t(1, 2).First is 1', '\telements(0)',
+	'Reverse List', '\t(1, 2).Reverse is (2, 1)', '\t(Last, First)'].join('\n'));
 export const vector = parseType('C:/Strict/Math/Vector2.strict', [
 	'has numbers with Length is 2',
 	'constant One = Vector2(1, 1)',
@@ -34,6 +34,9 @@ export const vector = parseType('C:/Strict/Math/Vector2.strict', [
 	'\tVector2(0, 5).Normalize is Vector2(0, 1)',
 	'\tVector2(X / 5, 1)'
 ].join('\n'));
+export const character = parseType('C:/Strict/Character.strict', 'has number');
+export const range = parseType('C:/Strict/Range.strict',
+	['has iterator', 'has Start Number', 'has ExclusiveEnd Number', 'for Iterator(Number)', '\tvalue'].join('\n'));
 const ownLines = [
 	'has vector Vector2',
 	'has name Text',
@@ -44,7 +47,7 @@ const ownLines = [
 	'\t\tdoubled.X to Text'
 ];
 const own = parseType('C:/Code/Own.strict', ownLines.join('\n'));
-export const types = [own, number, text, list, vector];
+export const types = [own, number, text, list, vector, character, range];
 
 suite('strict index', () => {
 	test('parseType reads members, parameters with their inferred types, return types and tests', () => {
@@ -84,10 +87,26 @@ suite('strict index', () => {
 		assert.strictEqual(resolve('Vector2', scope)?.isType, true);
 	});
 
+	test('value is the element in a for over a list, text or range, also around a nested for x in, outside the own type', () => {
+		const lines = ['has numbers', 'Sum(texts) Number', '\tfor numbers', '\t\tfor text in texts', '\t\t\tvalue',
+			'\tfor texts', '\t\tfor value', '\t\t\tvalue', '\tfor Range(0, 3)', '\t\tvalue', '\tfor numbers.Reverse', '\t\tvalue',
+			'\tfor 10', '\t\tvalue', '\tvalue'];
+		const loops = parseType('C:/Code/Loops.strict', lines.join('\n'));
+		const valueAt = (line: number) => resolve('value', scopeAt([loops, ...types], loops, lines, line))?.type.name;
+		assert.deepStrictEqual([4, 6, 7, 9, 11, 13, 14].map(valueAt),
+			['Number', 'Text', 'Character', 'Number', 'Number', 'Number', 'Loops']);
+	});
+
 	test('membersOf lists methods and members of a type and of the types it has', () => {
 		const names = membersOf({ type: own }, types).map((entry) => `${entry.owner.name}.${entry.name}`);
 		assert.deepStrictEqual(names, ['Own.vector', 'Own.name', 'Own.Scaled', 'Vector2.numbers', 'Vector2.One', 'Vector2.X',
 			'Vector2.Normalize', 'Text.characters', 'Text.Length']);
+	});
+
+	test('isTrait when every method has no body, computed methods like Area = Width * Height are bodies', () => {
+		assert.strictEqual(isTrait(parseType('C:/Strict/Closeable.strict', 'Close')), true);
+		assert.strictEqual(isTrait(parseType('C:/Code/Rectangle.strict', 'has Width Number\nArea = Width * 2')), false);
+		assert.strictEqual(isTrait(parseType('C:/Code/Empty.strict', 'has number')), false);
 	});
 
 	test('callBefore finds the called chain and the index of the argument being typed', () => {

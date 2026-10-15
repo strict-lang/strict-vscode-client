@@ -1,8 +1,12 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
 	extractDiagnosticDetail,
 	formatDiagnosticMessage,
-	humanizePascalCase
+	humanizePascalCase,
+	ruleSource
 } from '../../diagnosticMessages';
 
 suite('diagnostics', () => {
@@ -98,5 +102,19 @@ suite('diagnostics', () => {
 		assert.ok(formatted.startsWith(
 			"Instruction execution failed: FieldLoad on non-struct value for field 'value'"));
 		assert.ok(formatted.includes('at Strict/Boolean.not in C:\\repo\\Boolean.strict:line 4'));
+	});
+
+	test('ruleSource is the first line of a Validators file quoting the rule', () => {
+		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-validators-'));
+		try {
+			fs.writeFileSync(path.join(folder, 'Limits.strict'), ['has lines Texts', 'Issues ValidationIssues',
+				'\tissues.Add(ValidationIssue("ExtraWhitespacesFoundAtBeginningOfLine", "indent with tabs", 1))'].join('\n'));
+			assert.deepStrictEqual(ruleSource('ExtraWhitespacesFoundAtBeginningOfLine', folder),
+				{ file: path.join(folder, 'Limits.strict'), line: 2 });
+			assert.strictEqual(ruleSource('ExtraWhitespaces', folder), undefined);
+			assert.strictEqual(ruleSource('ExtraWhitespacesFoundAtBeginningOfLine', path.join(folder, 'Missing')), undefined);
+		} finally {
+			fs.rmSync(folder, { recursive: true, force: true });
+		}
 	});
 });

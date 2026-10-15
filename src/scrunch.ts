@@ -1,13 +1,20 @@
 import {
+	CancellationToken,
 	commands,
 	Diagnostic,
 	Disposable,
+	FileCoverage,
 	FileSystemWatcher,
 	languages,
 	Location,
+	MarkdownString,
+	Memento,
 	Position,
 	QuickPickItem,
 	Range,
+	StatementCoverage,
+	StatusBarAlignment,
+	StatusBarItem,
 	TestController,
 	TestItem,
 	TestMessage,
@@ -22,17 +29,25 @@ import {
 	window,
 	workspace
 } from 'vscode';
-import { DecorationController } from './decorations';
-import { normalizeFsPath } from './paths';
+import * as path from 'path';
+import { DecorationController, slowTestMilliseconds } from './decorations';
+import { gitIgnored, LineCount } from './nativeCompiler';
+import { isIgnoredBy, normalizeFsPath } from './paths';
 import { discoverStrictTests, DiscoveredMethod, typeNameFromPath } from './scrunchDiscover';
 import {
 	enrichNotification,
+	groupByMethod,
 	isManualMethod,
 	lineBelongsTo,
 	lineCoverageMarks,
 	methodForLine,
+	methodOf,
+	MethodSummary,
+	remember,
 	shouldExecuteManual,
+	manualResults,
 	slowestTests,
+	TimingHistory,
 	visibleMethods
 } from './scrunchModel';
 import {
@@ -40,18 +55,27 @@ import {
 	formatErrorSummary,
 	formatMethodOutput,
 	MethodOutput,
+	methodLine,
 	parseDiscrepancy,
 	parseStackFrames,
-	TestRunnerNotification
+	TestRunnerNotification,
+	unprintedOutput
 } from './testResults';
 
 const excludeGlob = '{**/bin/**,**/obj/**,**/node_modules/**,**/.git/**}';
+const timingsKey = 'strict.scrunch.timings';
+/** A type whose `strict test` (start, compile, tests, exit) takes this long is shown as slow, most take 30-250 ms. */
+const slowProcessMs = 1000;
+/** Source of the errors `strict test` reports (ParsingFailed, TypeNotFound, crashes), the only errors failing tests. */
+export const testErrorSource = 'strict test';
 
 export type ScrunchTester = {
 	testAll(files: string[]): void;
+	retest(files: string[], signal?: AbortSignal, withLines?: boolean): Promise<void>;
+	run(uri: Uri, methodName: string, signal?: AbortSignal): Promise<void>;
 	changed(file: string): void;
 	deleted(file: string): void;
-	run(uri: Uri, methodName: string): Promise<void>;
+	frameFile(printed: string, file: string): string;
 };
 
 export class ScrunchController implements Disposable {
@@ -61,17 +85,36 @@ export class ScrunchController implements Disposable {
 	private readonly methods = new Map<string, DiscoveredMethod[]>();
 	private publishTimer: ReturnType<typeof setTimeout> | undefined;
 	private lastPublishKey = '';
+	/** What git ignores per workspace folder (uri), a file counts for the innermost folder holding it. */
+	private ignored = new Map<string, Set<string>>();
 	private userRunDepth = 0;
 	private readonly manualTag = new TestTag('scrunch.manual');
+	private readonly slowTag = new TestTag('slow');
 	private readonly disposables: Disposable[] = [];
+	private readonly timings: TimingHistory;
+	private readonly status: StatusBarItem;
+	private saveTimer: ReturnType<typeof setTimeout> | undefined;
+	private busyFiles = 0;
+	private readonly processTimes = new Map<string, { file: string; processMs: number; testsMs: number }>();
+	private readonly lineCounts = new Map<string, Map<number, LineCount>>();
+	private readonly coverageDetails = new WeakMap<FileCoverage, StatementCoverage[]>();
 
-	constructor(private readonly decorations: DecorationController, private readonly tester: ScrunchTester) {
+	constructor(private readonly decorations: DecorationController, private readonly tester: ScrunchTester,
+		private readonly memento: Memento) {
+		this.timings = memento.get<TimingHistory>(timingsKey, {});
+		this.status = window.createStatusBarItem('strict.scrunch', StatusBarAlignment.Left);
+		this.status.name = 'SCrunch';
+		this.status.command = 'workbench.view.testing.focus';
+		this.disposables.push(this.status);
 		this.controller = tests.createTestController('strict.scrunch', 'Types');
 		this.controller.refreshHandler = () => this.discoverWorkspace();
 		this.controller.createRunProfile('Run', TestRunProfileKind.Run,
-			(request) => this.onRunRequest(request), true);
+			(request, token) => this.onRunRequest(request, token), true);
 		this.controller.createRunProfile('Run Manual', TestRunProfileKind.Run,
-			(request) => this.onRunRequest(request), false, this.manualTag);
+			(request, token) => this.onRunRequest(request, token), false, this.manualTag);
+		this.controller.createRunProfile('Coverage', TestRunProfileKind.Coverage,
+			(request, token) => this.onRunRequest(request, token), true).loadDetailedCoverage = async (_run, coverage) =>
+			this.coverageDetails.get(coverage) ?? [];
 		this.disposables.push(this.controller);
 		this.watchers.push(workspace.createFileSystemWatcher('**/*.strict'));
 		for (const watcher of this.watchers) {
@@ -81,8 +124,11 @@ export class ScrunchController implements Disposable {
 			watcher.onDidDelete((uri) => this.onDiskDelete(uri));
 		}
 		this.disposables.push(workspace.onDidChangeTextDocument((event) => {
-			if (event.document.languageId === 'strict' && event.document.isDirty) {
-				this.invalidate(event.document.uri);
+			const fileItem = event.document.languageId === 'strict' && event.document.isDirty
+				? this.findFileItem(event.document.uri) : undefined;
+			if (fileItem) {
+				this.controller.invalidateTestResults(fileItem);
+				this.refreshCoverage(event.document.uri);
 			}
 		}));
 		this.disposables.push(languages.onDidChangeDiagnostics((event) => {
@@ -105,9 +151,68 @@ export class ScrunchController implements Disposable {
 		if (this.publishTimer) {
 			clearTimeout(this.publishTimer);
 		}
+		if (this.saveTimer) {
+			clearTimeout(this.saveTimer);
+			void this.memento.update(timingsKey, this.timings);
+		}
 		for (const item of this.disposables) {
 			item.dispose();
 		}
+	}
+
+	public setBusy(file: string, isBusy: boolean): void {
+		const fileItem = this.findFileItem(Uri.file(file));
+		if (fileItem) {
+			fileItem.busy = isBusy;
+		}
+		this.busyFiles = Math.max(0, this.busyFiles + (isBusy ? 1 : -1));
+		this.updateStatus();
+	}
+
+	/** Time of the whole `strict test` of file next to its tests, a slow start, compile or exit shows on the type. */
+	public setProcessTime(file: string, processMs: number, testsMs: number): void {
+		this.processTimes.set(keyOf(Uri.file(file)), { file, processMs, testsMs });
+		const fileItem = this.findFileItem(Uri.file(file));
+		if (fileItem) {
+			fileItem.description = processMs >= slowProcessMs ? `strict test ${formatDuration(processMs)}` : undefined;
+		}
+	}
+
+	/** Passed, failed and slow tests of the last runs in the status bar, spinning while Strict runs. */
+	private updateStatus(): void {
+		const all = [...this.results.values()].flatMap((byLine) => [...byLine.values()]).filter((result) => result.expression);
+		const failed = all.filter((result) => result.state === 0).length;
+		const slow = all.filter((result) => (result.durationMs ?? 0) >= slowTestMilliseconds()).length;
+		this.status.text = `${this.busyFiles > 0 ? '$(sync~spin)' : '$(beaker)'} ${all.length - failed}` +
+			`${failed > 0 ? ` $(error) ${failed}` : ''}${slow > 0 ? ` $(watch) ${slow}` : ''}`;
+		this.status.tooltip = new MarkdownString(`SCrunch: ${all.length - failed} tests passed, ${failed} failed, ${slow} slow ` +
+			`(from ${slowTestMilliseconds()} ms on)${this.busyFiles > 0 ? `, testing ${this.busyFiles} types` : ''}\n\n` +
+			'[Show Testing view](command:workbench.view.testing.focus) · ' +
+			'[Show slowest tests](command:strict-vscode-client.scrunch.slowestTests)');
+		this.status.tooltip.isTrusted = { enabledCommands: ['workbench.view.testing.focus', 'strict-vscode-client.scrunch.slowestTests'] };
+		if (this.methods.size > 0) {
+			this.status.show();
+		}
+	}
+
+	/** Publishes everything again, for example after strict.slowTestMilliseconds changed. */
+	public republish(): void {
+		this.lastPublishKey = '';
+		this.queuePublish();
+	}
+
+	/** Results of one `strict test` of file replace its earlier test results (results of Run programs stay), the remembered
+	 * times of tests it no longer has are dropped, so are the line counts of its last coverage run without new counts. */
+	public applyResults(file: string, results: TestRunnerNotification[], counts?: LineCount[]): void {
+		const uri = Uri.file(file);
+		const key = keyOf(uri);
+		this.lineCounts.set(key, new Map((counts ?? []).filter((count) => normalizeFsPath(count.file) === key).map((count) =>
+			[count.line, count])));
+		this.results.set(key, manualResults(this.results.get(key) ?? new Map(), this.methodsFor(uri)));
+		const current = new Set(results.map((result) => `${key}|${result.expression}`));
+		Object.keys(this.timings).filter((name) => name.startsWith(`${key}|`) && !current.has(name) &&
+			!results.some((result) => result.cached)).forEach((name) => delete this.timings[name]);
+		results.forEach((result) => this.applyResult(counts ? { ...result, native: true } : result));
 	}
 
 	public applyResult(message: TestRunnerNotification): void {
@@ -126,10 +231,7 @@ export class ScrunchController implements Disposable {
 		const key = keyOf(uri);
 		const enriched = enrichNotification(message, this.methods.get(key) ?? [],
 			typeNameFromPath(uri.fsPath));
-		if (!enriched.methodName) {
-			return;
-		}
-		const method = this.methodByName(uri, enriched.methodName);
+		const method = methodOf(this.methodsFor(uri), enriched);
 		if (!method || (method.tests.length === 0 && !method.runnable)) {
 			return;
 		}
@@ -144,11 +246,13 @@ export class ScrunchController implements Disposable {
 			: method.tests.length === 0
 				? method.lineNumber
 				: enriched.lineNumber;
-		byLine.set(line, {
-			...enriched, lineNumber: line, cached: false, uri: uri.toString(),
-			lastRunAt: enriched.lastRunAt ?? new Date().toISOString()
-		});
-		this.ensureMethodItem(uri, enriched.methodName);
+		const timed = remember(this.timings, `${key}|${enriched.expression ?? line}`, enriched, slowTestMilliseconds());
+		this.saveTimer ??= setTimeout(() => {
+			this.saveTimer = undefined;
+			void this.memento.update(timingsKey, this.timings);
+		}, 2000);
+		byLine.set(line, { ...timed, lineNumber: line, uri: uri.toString() });
+		this.ensureMethodItem(uri, method);
 		this.refreshCoverage(uri);
 		if (this.userRunDepth === 0) {
 			this.queuePublish();
@@ -172,15 +276,21 @@ export class ScrunchController implements Disposable {
 		await this.showTestsForLine(editor.document.uri, editor.selection.active.line);
 	}
 
-	/** The tests that took longest in their last run, picking one opens it. */
+	/** Types whose whole `strict test` is slow, then the tests that took longest in their last run, picking one opens it. */
 	public async showSlowestTests(): Promise<void> {
+		const processes = [...this.processTimes.values()].filter((time) => time.processMs >= slowProcessMs)
+			.sort((left, right) => right.processMs - left.processMs).map((time) => ({
+				label: `${formatDuration(time.processMs)}  strict test ${typeNameFromPath(time.file)}`,
+				description: `its tests ${formatDuration(time.testsMs)}`, detail: 'start, compile, tests and exit of strict',
+				test: { lineNumber: 0, state: 1, uri: Uri.file(time.file).toString() } as TestRunnerNotification
+			}));
 		const slowest = slowestTests([...this.results.values()].flatMap((byLine) => [...byLine.values()]), 100);
-		const picked = await window.showQuickPick(slowest.map((test) => ({
+		const picked = await window.showQuickPick([...processes, ...slowest.map((test) => ({
 			label: `${formatDuration(test.durationMs)}  ${test.expression ?? `line ${test.lineNumber + 1}`}`,
 			description: [test.typeName, test.methodName].filter(Boolean).join('.'),
 			detail: test.state === 0 ? 'failed' : undefined,
 			test
-		})), { title: 'Slowest tests', placeHolder: slowest.length > 0 ? 'Open test' : 'No timed tests yet, save a .strict file' });
+		}))], { title: 'Slowest tests', placeHolder: slowest.length > 0 ? 'Open test' : 'No timed tests yet, save a .strict file' });
 		const uri = picked?.test.uri ? this.parseUri(picked.test.uri) : undefined;
 		if (uri) {
 			const line = picked!.test.lineNumber;
@@ -221,7 +331,10 @@ export class ScrunchController implements Disposable {
 		}
 	}
 
+	/** Tests every .strict file of the workspace git does not ignore (copied packages, artifacts and worktrees are no types). */
 	public async discoverWorkspace(): Promise<void> {
+		this.ignored = new Map(await Promise.all((workspace.workspaceFolders ?? []).map(async (folder) =>
+			[folder.uri.toString(), await gitIgnored(folder.uri.fsPath)] as const)));
 		const files = (await workspace.findFiles('**/*.strict', excludeGlob)).filter((uri) => !this.isIgnored(uri));
 		for (const uri of files) {
 			await this.discoverFile(uri);
@@ -257,15 +370,19 @@ export class ScrunchController implements Disposable {
 		const fileItem = this.ensureFileItem(uri);
 		fileItem.children.replace([]);
 		for (const method of visible) {
-			const methodItem = this.ensureChild(fileItem, methodId(uri, method.name), method.name, uri);
-			methodItem.range = new Range(method.lineNumber, 0, method.lineNumber, 0);
-			methodItem.tags = method.tests.length === 0 && method.runnable ? [this.manualTag] : [];
-			methodItem.children.replace([]);
+			this.ensureMethodItem(uri, method);
 		}
 		this.refreshCoverage(uri);
 	}
 
+	// ponytail: asks git again for a new file outside the ignored folders, new ones while it runs share its call and miss a folder
+	// ignored after it started; upgrade: git check-ignore --stdin of a batch
+	/** Tests a changed file, asks git again for a new one, it can be in a folder ignored since (a worktree, new artifacts). */
 	private async onDiskChange(uri: Uri): Promise<void> {
+		const folder = workspace.getWorkspaceFolder(uri);
+		if (folder && !this.methods.has(keyOf(uri)) && !this.isIgnored(uri)) {
+			this.ignored.set(folder.uri.toString(), await gitIgnored(folder.uri.fsPath));
+		}
 		if (this.isIgnored(uri)) {
 			return;
 		}
@@ -284,59 +401,24 @@ export class ScrunchController implements Disposable {
 		this.results.delete(keyOf(uri));
 		const fileItem = this.findFileItem(uri);
 		if (fileItem) {
-			fileItem.label = typeNameFromPath(uri.fsPath);
 			fileItem.description = undefined;
 			fileItem.error = undefined;
 			fileItem.children.forEach((child) => {
-				child.label = methodNameFromItem(child);
 				child.description = undefined;
 				child.error = undefined;
 			});
 		}
 	}
 
+	/** Errors of `strict test` mark the type as errored (its tests already failed with them), lint stays in Problems. */
 	public applyDiagnostics(uri: Uri, diagnostics: readonly Diagnostic[]): void {
-		const errors = diagnostics.filter((item) => item.severity === 0);
+		const errors = testErrors(diagnostics);
 		const fileItem = this.findFileItem(uri) ?? (errors.length > 0 ? this.ensureFileItem(uri) : undefined);
-		if (!fileItem) {
-			this.refreshCoverage(uri);
-			return;
+		if (fileItem) {
+			const line = errors[0]?.range.start.line ?? 0;
+			fileItem.error = errors.length > 0 ? errors.map((item) => item.message).join('\n') : undefined;
+			fileItem.range = new Range(line, 0, line, 0);
 		}
-		if (errors.length === 0) {
-			fileItem.error = undefined;
-			fileItem.range = new Range(0, 0, 0, 0);
-			fileItem.children.forEach((child) => {
-				child.error = undefined;
-			});
-			this.refreshCoverage(uri);
-			this.queuePublish();
-			return;
-		}
-		const errorText = errors.map((item) => item.message).join('\n');
-		const errorLines = new Set(errors.map((item) => item.range.start.line));
-		const firstErrorLine = errors[0].range.start.line;
-		fileItem.error = undefined;
-		fileItem.range = new Range(firstErrorLine, 0, firstErrorLine, 0);
-		fileItem.children.forEach((methodItem) => {
-			const method = this.methodByName(uri, methodNameFromItem(methodItem));
-			if (!method || isManualMethod(method)) {
-				methodItem.error = undefined;
-				return;
-			}
-			const hitLine = [...errorLines].find((line) => lineBelongsTo(method, line));
-			if (hitLine === undefined) {
-				methodItem.error = undefined;
-				return;
-			}
-			this.storeResult(uri, {
-				lineNumber: hitLine,
-				state: 0,
-				uri: uri.toString(),
-				methodName: method.name,
-				typeName: typeNameFromPath(uri.fsPath),
-				message: errorText
-			});
-		});
 		this.refreshCoverage(uri);
 		this.queuePublish();
 	}
@@ -344,7 +426,11 @@ export class ScrunchController implements Disposable {
 	private removeFile(uri: Uri): void {
 		this.results.delete(keyOf(uri));
 		this.methods.delete(keyOf(uri));
-		this.controller.items.delete(fileId(uri));
+		const packageItem = this.controller.items.get(packageId(uri));
+		packageItem?.children.delete(fileId(uri));
+		if (packageItem?.children.size === 0) {
+			this.controller.items.delete(packageItem.id);
+		}
 	}
 
 	private removeFileIfEmpty(uri: Uri): void {
@@ -366,6 +452,7 @@ export class ScrunchController implements Disposable {
 
 	private publishAll(): void {
 		this.publishTimer = undefined;
+		this.updateStatus();
 		for (const key of this.methods.keys()) {
 			this.refreshCoverage(Uri.file(key));
 		}
@@ -376,82 +463,69 @@ export class ScrunchController implements Disposable {
 		this.lastPublishKey = fingerprint;
 		const run = this.controller.createTestRun(new TestRunRequest(undefined, undefined, undefined, false, true),
 			'Types', false);
+		const printed = new Set<string>();
 		for (const key of this.methods.keys()) {
-			const uri = Uri.file(key);
-			const fileItem = this.findFileItem(uri);
-			if (!fileItem) {
+			const fileItem = this.findFileItem(Uri.file(key));
+			if (!fileItem?.uri) {
 				continue;
 			}
+			const uri = fileItem.uri;
 			this.dropUnknownMethods(uri, fileItem);
 			const byLine = this.results.get(key) ?? new Map();
 			const discovered = this.methods.get(key) ?? [];
 			const visible = visibleMethods(discovered);
-			const grouped = groupByMethod(byLine);
-			const reported = new Set<string>();
-			for (const [methodName, summary] of grouped) {
-				if (!visible.some((method) => method.name === methodName)) {
-					continue;
-				}
-				const methodItem = this.ensureMethodItem(uri, methodName);
-				this.publishMethod(run, uri, methodItem, methodName, summary, discovered);
-				reported.add(methodName);
-			}
+			const grouped = groupByMethod(byLine, discovered);
 			for (const method of visible) {
-				if (reported.has(method.name)) {
-					continue;
+				const summary = grouped.get(method.header);
+				if (summary) {
+					this.publishMethod(run, uri, this.ensureMethodItem(uri, method), method, summary, printed);
 				}
-				const methodItem = fileItem.children.get(methodId(uri, method.name));
-				if (!methodItem?.error) {
-					continue;
-				}
-				const message = new TestMessage(String(methodItem.error));
-				message.location = new Location(uri, new Position(method.lineNumber, 0));
-				run.appendOutput(String(methodItem.error).replace(/\n/g, '\r\n') + '\r\n',
-					new Location(uri, new Position(method.lineNumber, 0)), methodItem);
-				run.failed(methodItem, message);
 			}
-			this.updateTypeDuration(fileItem);
 		}
 		run.end();
 	}
 
+	/** Publishes the result of method, its output unless printed has it, see unprintedOutput. */
 	private publishMethod(
 		run: TestRun,
 		uri: Uri,
 		methodItem: TestItem,
-		methodName: string,
+		method: DiscoveredMethod,
 		summary: MethodSummary,
-		discovered: DiscoveredMethod[]
+		printed: Set<string>
 	): void {
-		const duration = methodDescription(summary);
-		methodItem.label = duration ? `${methodName}  ${duration}` : methodName;
 		methodItem.description = summary.failed
 			? formatErrorSummary(summary.messages.find((item) => item.state === 0)?.message)
-			: undefined;
-		const output = formatMethodOutput(methodOutput(summary, discovered));
-		if (output) {
-			run.appendOutput(output.replace(/\n/g, '\r\n') + '\r\n',
-				new Location(uri, new Position(methodItem.range?.start.line ?? 0, 0)), methodItem);
-		}
+			: summary.cached ? 'cached' : undefined;
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
-		if (summary.failed || methodItem.error) {
-			const failed = summary.messages.filter((item) => item.state === 0);
-			const messages = failed.length > 0
-				? failed.map((item) => this.toMessage(uri, item))
-				: [new TestMessage(String(methodItem.error))];
-			run.failed(methodItem, messages, durationMs);
+		this.appendMethodOutput(run, uri, methodItem, method.lineNumber, summary,
+			unprintedOutput(methodOutput(summary), keyOf(uri), printed));
+		methodItem.tags = isManualMethod(method) ? [this.manualTag] : (durationMs ?? 0) >= slowTestMilliseconds()
+			? [this.slowTag] : [];
+		if (summary.failed) {
+			run.failed(methodItem, summary.messages.filter((item) => item.state === 0).map((item) => this.toMessage(uri, item)),
+				durationMs);
 			return;
 		}
 		run.passed(methodItem, durationMs);
 	}
 
+	/** methodLine of item, a link relative to its workspace folder (the cwd of the test output), then output if any. */
+	private appendMethodOutput(run: TestRun, uri: Uri, item: TestItem, line: number, summary: MethodSummary,
+		output: string | undefined): void {
+		const place = `${workspace.asRelativePath(uri, false)}:${line + 1}`;
+		const text = [methodLine(item.label, summary.failed, summary.hasDuration ? summary.duration : undefined, place), output]
+			.filter(Boolean).join('\n');
+		run.appendOutput(text.replace(/\n/g, '\r\n') + '\r\n', new Location(uri, new Position(line, 0)), item);
+	}
+
+	/** Marks of the last results, none while the document has unsaved changes (their lines may have moved). */
 	private refreshCoverage(uri: Uri): void {
-		const discovered = this.methodsFor(uri);
+		const isDirty = workspace.textDocuments.some((document) => keyOf(document.uri) === keyOf(uri) && document.isDirty);
 		const results = this.results.get(keyOf(uri)) ?? new Map();
-		const errorLines = new Set(
-			languages.getDiagnostics(uri).filter((item) => item.severity === 0).map((item) => item.range.start.line)
-		);
-		this.decorations.applyCoverage(uri.toString(), lineCoverageMarks(discovered, results, errorLines));
+		const errorLines = new Set(testErrors(languages.getDiagnostics(uri)).map((item) => item.range.start.line));
+		this.decorations.applyCoverage(uri.toString(), isDirty ? []
+			: lineCoverageMarks(this.methodsFor(uri), results, errorLines, this.lineCounts.get(keyOf(uri))));
 	}
 
 	private toMessage(uri: Uri, message: TestRunnerNotification): TestMessage {
@@ -479,43 +553,39 @@ export class ScrunchController implements Disposable {
 		return testMessage;
 	}
 
-	private ensureMethodItem(uri: Uri, methodName: string): TestItem {
+	private ensureMethodItem(uri: Uri, method: DiscoveredMethod): TestItem {
 		const fileItem = this.ensureFileItem(uri);
-		const methodItem = this.ensureChild(fileItem, methodId(uri, methodName), methodName, uri);
-		const method = this.methodByName(uri, methodName);
-		if (method) {
-			methodItem.range = new Range(method.lineNumber, 0, method.lineNumber, 0);
-			methodItem.tags = method.tests.length === 0 && method.runnable ? [this.manualTag] : [];
-		}
+		const isOverloaded = this.methodsFor(uri).filter((other) => other.name === method.name).length > 1;
+		const methodItem = this.ensureChild(fileItem, methodId(uri, method.header), isOverloaded ? method.header : method.name, uri);
+		methodItem.range = new Range(method.lineNumber, 0, method.lineNumber, 0);
+		methodItem.tags = isManualMethod(method) ? [this.manualTag] : [];
 		methodItem.children.replace([]);
 		return methodItem;
 	}
 
 	private ensureFileItem(uri: Uri): TestItem {
-		const id = fileId(uri);
-		let fileItem = this.controller.items.get(id);
-		const label = typeNameFromPath(uri.fsPath);
-		if (!fileItem) {
-			fileItem = this.controller.createTestItem(id, label, uri);
-			this.controller.items.add(fileItem);
-		} else {
-			fileItem.label = label;
+		let packageItem = this.controller.items.get(packageId(uri));
+		if (!packageItem) {
+			const folder = path.dirname(workspace.asRelativePath(uri, false));
+			packageItem = this.controller.createTestItem(packageId(uri), folder === '.'
+				? workspace.getWorkspaceFolder(uri)?.name ?? folder : folder);
+			this.controller.items.add(packageItem);
 		}
-		fileItem.sortText = label;
+		const fileItem = this.ensureChild(packageItem, fileId(uri), typeNameFromPath(uri.fsPath), uri);
+		fileItem.sortText = fileItem.label;
 		fileItem.range = new Range(0, 0, 0, 0);
 		return fileItem;
 	}
 
 	private findFileItem(uri: Uri): TestItem | undefined {
-		return this.controller.items.get(fileId(uri));
+		return this.controller.items.get(packageId(uri))?.children.get(fileId(uri));
 	}
 
 	private dropUnknownMethods(uri: Uri, fileItem: TestItem): void {
-		const visible = new Set(visibleMethods(this.methodsFor(uri)).
-			map((method) => method.name));
+		const visible = new Set(visibleMethods(this.methodsFor(uri)).map((method) => method.header));
 		const stale: string[] = [];
 		fileItem.children.forEach((child) => {
-			if (!visible.has(methodNameFromItem(child))) {
+			if (!visible.has(methodKeyFromItem(child))) {
 				stale.push(child.id);
 			}
 		});
@@ -533,17 +603,35 @@ export class ScrunchController implements Disposable {
 		await commands.executeCommand('workbench.panel.testResults.view.focus');
 	}
 
-	private async onRunRequest(request: TestRunRequest): Promise<void> {
+	/** Tests the files of the requested items again without cache (to time them), with line counts for the Coverage profile,
+	 * the Stop button kills Strict. */
+	private async onRunRequest(request: TestRunRequest, token: CancellationToken): Promise<void> {
 		const items = itemsIn(request, this.controller);
 		const run = this.controller.createTestRun(request, 'SCrunch', true);
+		const abort = new AbortController();
+		const cancelled = token.onCancellationRequested(() => abort.abort());
 		this.userRunDepth += 1;
 		try {
+			const tested = items.filter((item) => this.methodOfItem(item)?.tests.length);
+			tested.forEach((item) => run.started(item));
+			const files = [...new Set(tested.map((item) => item.uri!.fsPath))];
+			const isCoverage = request.profile?.kind === TestRunProfileKind.Coverage;
+			await this.tester.retest(files, abort.signal, isCoverage);
 			for (const item of items) {
-				await this.runOne(run, request, item);
+				if (token.isCancellationRequested) {
+					run.skipped(item);
+				} else {
+					await this.runOne(run, request, item, abort.signal);
+				}
+			}
+			if (isCoverage && !token.isCancellationRequested) {
+				files.forEach((file) => this.addCoverage(run, Uri.file(file)));
 			}
 		} finally {
+			cancelled.dispose();
 			this.userRunDepth -= 1;
 			run.end();
+			this.republish();
 		}
 		const first = items.find((item) => item.uri);
 		if (first?.uri) {
@@ -551,13 +639,25 @@ export class ScrunchController implements Disposable {
 		}
 	}
 
-	private async runOne(run: TestRun, request: TestRunRequest, item: TestItem): Promise<void> {
+	/** Implementation lines of uri with how often its last coverage run executed them, test lines are timed tests already. */
+	private addCoverage(run: TestRun, uri: Uri): void {
+		const tests = new Set(this.methodsFor(uri).flatMap((method) => method.tests.map((test) => test.lineNumber)));
+		const details = [...this.lineCounts.get(keyOf(uri))?.values() ?? []].filter((count) => !tests.has(count.line)).map((count) =>
+			new StatementCoverage(count.executions, new Position(count.line, 0)));
+		if (details.length > 0) {
+			const coverage = FileCoverage.fromDetails(uri, details);
+			this.coverageDetails.set(coverage, details);
+			run.addCoverage(coverage);
+		}
+	}
+
+	private async runOne(run: TestRun, request: TestRunRequest, item: TestItem, signal: AbortSignal): Promise<void> {
 		const uri = item.uri;
 		if (!uri) {
 			run.skipped(item);
 			return;
 		}
-		const method = this.methodByName(uri, methodNameFromItem(item));
+		const method = this.methodOfItem(item);
 		if (!method) {
 			run.skipped(item);
 			return;
@@ -581,7 +681,7 @@ export class ScrunchController implements Disposable {
 		}
 		run.started(item);
 		try {
-			await this.tester.run(uri, method.name);
+			await this.tester.run(uri, method.name, signal);
 		} catch (error) {
 			const text = error instanceof Error ? error.message : String(error);
 			run.failed(item, new TestMessage(text));
@@ -646,14 +746,10 @@ export class ScrunchController implements Disposable {
 			cached: all.every((message) => Boolean(message.cached)),
 			messages: all
 		};
-		const output = formatMethodOutput(methodOutput(summary, [method]));
 		item.description = summary.failed
 			? formatErrorSummary(primary.message)
 			: undefined;
-		if (output) {
-			run.appendOutput(output.replace(/\n/g, '\r\n') + '\r\n',
-				new Location(uri, new Position(method.lineNumber, 0)), item);
-		}
+		this.appendMethodOutput(run, uri, item, method.lineNumber, summary, formatMethodOutput(methodOutput(summary)));
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
 		if (summary.failed) {
 			const failed = all.filter((message) => message.state === 0);
@@ -686,7 +782,7 @@ export class ScrunchController implements Disposable {
 		}
 		let match: TestItem | undefined;
 		fileItem.children.forEach((child) => {
-			const method = this.methodByName(uri, methodNameFromItem(child));
+			const method = this.methodOfItem(child);
 			if (method && lineBelongsTo(method, lineNumber)) {
 				match = child;
 			}
@@ -694,8 +790,8 @@ export class ScrunchController implements Disposable {
 		return match ?? fileItem;
 	}
 
-	private methodByName(uri: Uri, name: string): DiscoveredMethod | undefined {
-		return this.methodsFor(uri).find((method) => method.name === name);
+	private methodOfItem(item: TestItem): DiscoveredMethod | undefined {
+		return item.uri && this.methodsFor(item.uri).find((method) => method.header === methodKeyFromItem(item));
 	}
 
 	private methodsFor(uri: Uri): DiscoveredMethod[] {
@@ -713,32 +809,6 @@ export class ScrunchController implements Disposable {
 		return item;
 	}
 
-	private updateTypeDuration(item: TestItem): void {
-		const typeName = item.uri ? typeNameFromPath(item.uri.fsPath) : item.label;
-		let total = 0;
-		let counted = 0;
-		let cached = 0;
-		item.children.forEach((child) => {
-			const duration = durationFromLabel(child.label);
-			if (duration === 'cached') {
-				cached += 1;
-				return;
-			}
-			const ms = parseDurationMs(duration);
-			if (ms !== undefined) {
-				total += ms;
-				counted += 1;
-			}
-		});
-		item.description = undefined;
-		if (counted > 0) {
-			const text = formatDuration(total);
-			item.label = text ? `${typeName}  ${text}` : typeName;
-			return;
-		}
-		item.label = cached > 0 ? `${typeName}  cached` : typeName;
-	}
-
 	private parseUri(value: string | undefined): Uri | undefined {
 		if (!value) {
 			return undefined;
@@ -750,22 +820,20 @@ export class ScrunchController implements Disposable {
 		}
 	}
 
-	private fileUri(filePath: string, fallback: Uri): Uri {
-		try {
-			return Uri.file(filePath);
-		} catch {
-			return fallback;
-		}
+	private fileUri(filePath: string, uri: Uri): Uri {
+		return Uri.file(this.tester.frameFile(filePath, uri.fsPath));
 	}
 
 	private isIgnored(uri: Uri): boolean {
 		const normalized = uri.fsPath.replace(/\\/g, '/');
-		return /\/(bin|obj|node_modules|\.git)\//i.test(`/${normalized}/`);
+		const folder = workspace.getWorkspaceFolder(uri);
+		return /\/(bin|obj|node_modules|\.git)\//i.test(`/${normalized}/`) ||
+			isIgnoredBy(uri.fsPath, (folder && this.ignored.get(folder.uri.toString())) ?? new Set());
 	}
 }
 
-export function registerScrunch(decorations: DecorationController, tester: ScrunchTester): ScrunchController {
-	return new ScrunchController(decorations, tester);
+export function registerScrunch(decorations: DecorationController, tester: ScrunchTester, memento: Memento): ScrunchController {
+	return new ScrunchController(decorations, tester, memento);
 }
 
 function keyOf(uri: Uri): string {
@@ -776,72 +844,23 @@ function fileId(uri: Uri): string {
 	return `file:${keyOf(uri)}`;
 }
 
-function methodId(uri: Uri, methodName: string): string {
-	return `method:${keyOf(uri)}#${methodName}`;
+/** The folder of uri, the package holding its type in the Testing view. */
+function packageId(uri: Uri): string {
+	return `package:${path.dirname(keyOf(uri))}`;
 }
 
-function methodNameFromItem(item: TestItem): string {
+function methodId(uri: Uri, header: string): string {
+	return `method:${keyOf(uri)}#${header}`;
+}
+
+/** The header of a method item, it tells overloads apart. */
+function methodKeyFromItem(item: TestItem): string {
 	const separator = item.id.lastIndexOf('#');
 	return separator >= 0 ? item.id.slice(separator + 1) : item.label;
 }
 
-function durationFromLabel(label: string): string | undefined {
-	const separator = label.lastIndexOf('  ');
-	return separator >= 0 ? label.slice(separator + 2) : undefined;
-}
-
-type MethodSummary = {
-	duration: number;
-	hasDuration: boolean;
-	failed: boolean;
-	cached: boolean;
-	messages: TestRunnerNotification[];
-};
-
-function groupByMethod(byLine: Map<number, TestRunnerNotification>): Map<string, MethodSummary> {
-	const grouped = new Map<string, MethodSummary>();
-	for (const message of byLine.values()) {
-		if (!message.methodName) {
-			continue;
-		}
-		const current = grouped.get(message.methodName);
-		const hasDuration = message.durationMs !== undefined;
-		if (!current) {
-			grouped.set(message.methodName, {
-				duration: hasDuration ? message.durationMs ?? 0 : 0,
-				hasDuration,
-				failed: message.state === 0,
-				cached: Boolean(message.cached),
-				messages: [message]
-			});
-			continue;
-		}
-		if (hasDuration) {
-			current.duration += message.durationMs ?? 0;
-			current.hasDuration = true;
-		}
-		current.failed = current.failed || message.state === 0;
-		current.cached = current.cached && Boolean(message.cached);
-		current.messages.push(message);
-	}
-	return grouped;
-}
-
-function methodDescription(summary: MethodSummary): string | undefined {
-	if (summary.cached && !summary.failed) {
-		return 'cached';
-	}
-	return formatDuration(summary.hasDuration ? summary.duration : undefined);
-}
-
-function methodOutput(summary: MethodSummary, methods: DiscoveredMethod[]): MethodOutput {
-	const first = summary.messages[0];
+function methodOutput(summary: MethodSummary): MethodOutput {
 	const failed = summary.messages.find((item) => item.state === 0);
-	const method = methods.find((item) => item.name === first?.methodName);
-	const callCount = summary.messages.length;
-	const linesCalled = method
-		? method.tests.length + method.implementation.length
-		: undefined;
 	const consoleOutput = uniqueText(summary.messages.map((item) => item.consoleOutput));
 	const discrepancy = failed
 		? (failed.expected && failed.actual
@@ -849,19 +868,13 @@ function methodOutput(summary: MethodSummary, methods: DiscoveredMethod[]): Meth
 			: parseDiscrepancy(failed.details))
 		: undefined;
 	return {
-		durationMs: summary.hasDuration ? summary.duration : first?.durationMs,
-		lastRunAt: first?.lastRunAt,
-		methodsCalled: first?.methodsCalled ?? (method ? 1 : undefined),
-		linesCalled: first?.linesCalled ?? linesCalled,
-		callCount: first?.callCount ?? (callCount > 1 ? callCount : undefined),
 		consoleOutput,
 		details: failed?.details,
 		expected: discrepancy?.expected,
 		actual: discrepancy?.actual,
 		stackTrace: failed?.stackTrace,
 		message: failed?.message,
-		failed: summary.failed,
-		cached: summary.cached
+		failed: summary.failed
 	};
 }
 
@@ -870,41 +883,21 @@ function uniqueText(values: Array<string | undefined>): string | undefined {
 	return parts.length > 0 ? parts.join('\n') : undefined;
 }
 
+function testErrors(diagnostics: readonly Diagnostic[]): Diagnostic[] {
+	return diagnostics.filter((item) => item.source === testErrorSource);
+}
+
+/** Errors of `strict test` in the folder of uri, a Run method is not started while there are any. */
 function blockingErrors(uri: Uri): Diagnostic[] {
 	const folder = normalizeFsPath(uri.fsPath).replace(/\/[^/]+$/, '');
-	const errors: Diagnostic[] = [];
-	for (const document of workspace.textDocuments) {
-		if (!document.uri.fsPath.toLowerCase().endsWith('.strict')) {
-			continue;
-		}
-		if (normalizeFsPath(document.uri.fsPath).replace(/\/[^/]+$/, '') !== folder) {
-			continue;
-		}
-		for (const diagnostic of languages.getDiagnostics(document.uri)) {
-			if (diagnostic.severity === 0) {
-				errors.push(diagnostic);
-			}
-		}
-	}
-	if (errors.length > 0) {
-		return errors;
-	}
-	return languages.getDiagnostics(uri).filter((item) => item.severity === 0);
+	return [...new Map([uri, ...workspace.textDocuments.map((document) => document.uri).filter((other) =>
+		normalizeFsPath(other.fsPath).replace(/\/[^/]+$/, '') === folder)].map((other) => [keyOf(other), other])).values()]
+		.flatMap((other) => testErrors(languages.getDiagnostics(other)));
 }
 
 function errorFingerprint(): string {
-	const parts: string[] = [];
-	for (const document of workspace.textDocuments) {
-		if (!document.uri.fsPath.toLowerCase().endsWith('.strict')) {
-			continue;
-		}
-		for (const diagnostic of languages.getDiagnostics(document.uri)) {
-			if (diagnostic.severity === 0) {
-				parts.push(document.uri.fsPath + ':' + diagnostic.message);
-			}
-		}
-	}
-	return parts.sort().join('|');
+	return workspace.textDocuments.flatMap((document) => testErrors(languages.getDiagnostics(document.uri)).map((diagnostic) =>
+		document.uri.fsPath + ':' + diagnostic.message)).sort().join('|');
 }
 
 function publishFingerprint(results: Map<string, Map<number, TestRunnerNotification>>): string {
@@ -950,33 +943,11 @@ function expandItems(items: readonly TestItem[], exclude: readonly TestItem[]): 
 }
 
 function testPick(test: TestRunnerNotification): QuickPickItem & { test: TestRunnerNotification } {
-	const duration = test.cached ? 'cached' : formatDuration(test.durationMs);
+	const duration = `${formatDuration(test.durationMs) ?? ''}${test.cached ? ' cached' : ''}`.trim() || undefined;
 	return {
 		label: test.expression || `line ${test.lineNumber + 1}`,
 		description: test.state === 0 ? 'failed' : 'passed',
 		detail: duration,
 		test
 	};
-}
-
-function parseDurationMs(text: string | undefined): number | undefined {
-	if (!text) {
-		return undefined;
-	}
-	if (text === 'cached') {
-		return 0;
-	}
-	if (text.endsWith('us')) {
-		const value = Number(text.slice(0, -2));
-		return Number.isNaN(value) ? undefined : value / 1000;
-	}
-	if (text.endsWith('ms')) {
-		const value = Number(text.slice(0, -2));
-		return Number.isNaN(value) ? undefined : value;
-	}
-	if (text.endsWith('s')) {
-		const value = Number(text.slice(0, -1));
-		return Number.isNaN(value) ? undefined : value * 1000;
-	}
-	return undefined;
 }

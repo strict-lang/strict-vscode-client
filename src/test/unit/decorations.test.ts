@@ -1,5 +1,7 @@
 import * as assert from 'assert';
-import { formatCoverageHover, formatInlineFailure, formatInlineSlow, LineCoverageMark, slowestTests } from '../../scrunchModel';
+import {
+	formatCoverageHover, formatInlineFailure, formatInlineSlow, LineCoverageMark, remember, slowestTests, TimingHistory
+} from '../../scrunchModel';
 
 suite('decorations', () => {
 	test('coverage hover is duration, not a run-tests prompt', () => {
@@ -37,6 +39,28 @@ suite('decorations', () => {
 		assert.strictEqual(formatInlineSlow(mark(3, 'coverage', 238), 10), undefined);
 		assert.strictEqual(formatInlineSlow(mark(2, 'coverage', 9.9), 10), undefined);
 		assert.strictEqual(formatInlineSlow(mark(2, 'coverage', 238, true), 10), undefined);
+	});
+
+	test('slow marker tells the time before a slowdown', () => {
+		assert.strictEqual(formatInlineSlow({ lineNumber: 2, failed: false, kind: 'coverage',
+			tests: [{ lineNumber: 2, state: 1 }], durationMs: 238, previousMs: 12 }, 10), 'slow: 238ms (was 12ms)');
+	});
+
+	test('remember gives a cached pass its last time and marks a run more than twice as slow from the threshold on', () => {
+		const history: TimingHistory = {};
+		const pass = (durationMs?: number, cached?: boolean) => ({ lineNumber: 2, state: 1, durationMs, cached });
+		assert.strictEqual(remember(history, 'a', pass(4), 10).previousMs, undefined);
+		assert.strictEqual(remember(history, 'a', pass(undefined, true), 10).durationMs, 4);
+		assert.strictEqual(remember(history, 'a', pass(9), 10).previousMs, undefined);
+		assert.strictEqual(remember(history, 'a', pass(30), 10).previousMs, 9);
+		assert.strictEqual(remember(history, 'a', pass(undefined), 10).durationMs, undefined);
+		assert.strictEqual(history.a, 30);
+	});
+
+	test('remember keeps the native times of coverage runs out of the history of the times Strict usually takes', () => {
+		const history: TimingHistory = { a: 30 };
+		assert.strictEqual(remember(history, 'a', { lineNumber: 2, state: 1, durationMs: 1, native: true }, 0).durationMs, 1);
+		assert.strictEqual(history.a, 30);
 	});
 
 	test('slowestTests sorts timed results by duration and leaves out untimed ones', () => {

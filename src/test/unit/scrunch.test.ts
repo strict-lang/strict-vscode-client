@@ -5,8 +5,11 @@ import {
 	enrichNotification,
 	formatCoverageHover,
 	formatInlineFailure,
+	formatInlineSlow,
+	groupByMethod,
 	isManualMethod,
 	lineCoverageMarks,
+	manualResults,
 	methodForLine,
 	methodsWithTests,
 	shouldExecuteManual,
@@ -17,12 +20,21 @@ import {
 	formatErrorSummary,
 	formatFailureOutput,
 	formatMethodOutput,
+	MethodOutput,
+	methodLine,
 	parseDiscrepancy,
 	parseStackFrames,
-	TestRunnerNotification
+	TestRunnerNotification,
+	unprintedOutput
 } from '../../testResults';
 
 suite('scrunch discover', () => {
+	test('implementation includes the nested lines of conditions and loops', () => {
+		assert.deepStrictEqual(discoverStrictTests(['Sum Number', '\tLoop(3).Sum is 6', '\tif number < 0', '\t\treturn 0',
+			'\tfor Range(0, number)', '\t\ttotal = total + value', '\ttotal'].join('\n'))[0].implementation.map((line) =>
+			line.lineNumber), [2, 3, 4, 5, 6]);
+	});
+
 	test('finds methods and leading tests, skips members and implementation', () => {
 		const source = [
 			'has number',
@@ -157,6 +169,31 @@ suite('scrunch discover', () => {
 		assert.strictEqual(methodForLine(methods, 0), undefined);
 	});
 
+	test('tests never start with a member or parameter, a constant before a test belongs to the tests', () => {
+		const methods = discoverStrictTests(['has logger', 'Run', '\tlogger.Log("a is b")', '\tlogger.Log("c")',
+			'Digit Character', '\t5.Digit is "5"', '\tconstant invalid = Error', '\t10.Digit is invalid', '\t10.Random < 10',
+			'\tvalue is in Range(0, 10) then Character(value) else invalid'].join('\n'));
+		assert.deepStrictEqual(methods.map((method) => method.tests.map((test) => test.lineNumber)), [[], [5, 7, 8]]);
+		assert.strictEqual(methods[0].runnable && methods[0].tests.length === 0, true);
+	});
+
+	test('manualResults keep only the results of Run methods without tests, a new strict test replaces the others', () => {
+		const methods = discoverStrictTests(['has logger', 'Run', '\tlogger.Log("a")', 'Twice Number', '\tA.Twice is 2', '\t2']
+			.join('\n'));
+		const results = new Map<number, TestRunnerNotification>([[1, { lineNumber: 1, state: 1, methodName: 'Run' }],
+			[4, { lineNumber: 4, state: 0, methodName: 'Twice', expression: 'A.Twice is 2' }]]);
+		assert.deepStrictEqual([...manualResults(results, methods).keys()], [1]);
+	});
+
+	test('groupByMethod keeps overloads apart by their header', () => {
+		const methods = discoverStrictTests(['has characters', '+(other) Text', '\t"" + "more" is "more"',
+			'\tcharacters + other.characters', '+(number) Text', '\t"" + 1 is "1"', '\tcharacters + number to Text'].join('\n'));
+		const results = new Map<number, TestRunnerNotification>([[2, { lineNumber: 2, state: 1, methodName: '+' }],
+			[5, { lineNumber: 5, state: 0, methodName: '+' }]]);
+		assert.deepStrictEqual([...groupByMethod(results, methods)].map(([header, summary]) => [header, summary.failed]),
+			[['+(other) Text', false], ['+(number) Text', true]]);
+	});
+
 	test('enrichNotification fills method from line when the server omits it', () => {
 		const methods = discoverStrictTests([
 			'Greet Text',
@@ -233,36 +270,15 @@ suite('scrunch format', () => {
 		assert.ok(output.includes('Boolean.strict:line 2'));
 	});
 
-	test('formatMethodOutput is stats, not the test expression', () => {
-		const passed = formatMethodOutput({
-			durationMs: 0.012,
-			lastRunAt: '2026-08-16T12:00:00.000Z',
-			methodsCalled: 1,
-			linesCalled: 3,
-			callCount: 2
-		});
-		assert.ok(!passed.includes('TextHelper("World").Greet'));
-		assert.ok(!passed.includes('passed'));
-		assert.ok(!passed.includes('older results'));
-		assert.ok(passed.includes('12us'));
-		assert.ok(passed.includes('Methods called: 1'));
-		assert.ok(passed.includes('Lines called: 3'));
-		assert.ok(passed.includes('Called: 2 times'));
-		assert.ok(passed.includes('Last run:'));
-		const failed = formatMethodOutput({
-			durationMs: 0.8,
-			lastRunAt: '2026-08-16T12:00:00.000Z',
+	test('formatMethodOutput is only the failure, a passed method without console text logs nothing', () => {
+		assert.strictEqual(formatMethodOutput({}), '');
+		assert.strictEqual(formatMethodOutput({
 			details: '"Hello" is "Hello, yo!"',
 			expected: '"Hello, yo!"',
 			actual: '"Hello"',
 			stackTrace: 'at TextHelper.Greet in C:\\repo\\TextHelper.strict:line 3',
 			failed: true
-		});
-		assert.ok(!failed.includes('TextHelper("yo").Greet is'));
-		assert.ok(failed.includes('Expected: "Hello, yo!"'));
-		assert.ok(failed.includes('Actual: "Hello"'));
-		assert.ok(failed.includes('TextHelper.strict:line 3'));
-		assert.ok(failed.includes('0.8ms'));
+		}), 'Expected: "Hello, yo!"\nActual: "Hello"\n\nat TextHelper.Greet in C:\\repo\\TextHelper.strict:line 3');
 	});
 
 	test('formatErrorSummary is a short human name, not a type path', () => {
@@ -273,18 +289,30 @@ suite('scrunch format', () => {
 			'Cannot call body on trait method'
 		);
 		assert.strictEqual(formatErrorSummary('Strict/TextWriter.Write'), 'Strict/TextWriter.Write');
+		assert.strictEqual(formatErrorSummary('NameNotFound: LoadedUnitData used in ./WebWars/Scene.strict:8\n' +
+			'NameNotFound: SpellData used in ./WebWars/Scene.strict:49'), 'LoadedUnitData used in ./WebWars/Scene.strict:8');
 		assert.strictEqual(formatErrorSummary(undefined), undefined);
 	});
 
+	test('unprintedOutput prints a crash once, what a type printed once per file and every failed comparison', () => {
+		const printed = new Set<string>();
+		const crash = { failed: true, message: 'NameNotFound: NavigationMap used in ./Games/LevelProcessor.strict:3' };
+		const logged = { consoleOutput: 'computing' };
+		const comparison = { failed: true, expected: 'true', actual: 'false' };
+		assert.deepStrictEqual([[crash, 'A'], [crash, 'B'], [logged, 'A'], [logged, 'A'], [logged, 'B'], [comparison, 'A'],
+			[comparison, 'A']].map(([output, file]) => unprintedOutput(output as MethodOutput, file as string, printed) !== undefined),
+			[true, false, true, false, true, true, true]);
+	});
+
+	test('methodLine shows how a method did, its time and where it is', () => {
+		assert.deepStrictEqual([methodLine('Process', false, 0.3, 'ImageProcessing/AdjustBrightness.strict:6'),
+			methodLine('Run', true, undefined, 'Sum.strict:2')],
+			['✓ Process 0.3ms at ImageProcessing/AdjustBrightness.strict:6', '✗ Run cached at Sum.strict:2']);
+	});
+
 	test('formatMethodOutput shows console text when the test printed something', () => {
-		const text = formatMethodOutput({
-			durationMs: 1.5,
-			lastRunAt: '2026-08-16T12:00:00.000Z',
-			consoleOutput: 'Hello, World!\nHello, Strict!'
-		});
-		assert.ok(text.startsWith('Hello, World!'));
-		assert.ok(text.includes('Hello, Strict!'));
-		assert.ok(text.includes('1.2ms') || text.includes('1.5ms'));
+		assert.strictEqual(formatMethodOutput({ consoleOutput: 'Hello, World!\nHello, Strict!' }),
+			'Hello, World!\nHello, Strict!');
 	});
 
 	test('parseDiscrepancy reads actual is expected', () => {
@@ -354,6 +382,40 @@ suite('scrunch coverage', () => {
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.kind, 'coverage');
 		assert.strictEqual(formatInlineFailure(marks.find((mark) => mark.lineNumber === 1)!),
 			'expected "Hello, World!"  got "Hello"');
+	});
+
+	test('a crash paints the lines of its stack red and leaves the rest of the method unpainted', () => {
+		const methods = discoverStrictTests(['has number', 'Value Number', '\tCrashing(3).Value is 4', '\tlet list = (1, 2)',
+			'\tlet bad = list(number)', '\tlet result = bad + 1', '\tresult'].join('\n'));
+		const marks = (failure: Partial<TestRunnerNotification>) => lineCoverageMarks(methods, new Map([[2, { lineNumber: 2,
+			state: 0, expression: 'Crashing(3).Value is 4', methodName: 'Value', typeName: 'Crashing', ...failure }]]), new Set());
+		assert.deepStrictEqual(marks({ actual: 'Error: Value', stackTrace: 'at Crashing.Value in Crashing.strict:line 5\n' +
+			'at Crashing.Value in Crashing.strict:line 6\nat Crashing.$Tests in Crashing.strict:line 3' }).map((mark) =>
+			[mark.lineNumber, mark.failed]), [[1, true], [2, true], [3, false], [4, true], [5, true]]);
+		const beforeRunning = marks({ message: 'NameNotFound: LoadedUnitData used in ./WebWars/Scene.strict:8' });
+		assert.deepStrictEqual(beforeRunning.map((mark) => [mark.lineNumber, mark.failed]), [[1, true], [2, true]]);
+		assert.strictEqual(formatCoverageHover(beforeRunning[1]), 'NameNotFound: LoadedUnitData used in ./WebWars/Scene.strict:8');
+	});
+
+	test('line counts of a coverage run leave never executed lines unpainted and tell the time of slow lines', () => {
+		const methods = discoverStrictTests(['has number', 'Slow Number', '\tSlow(2).Slow is 4', '\tif number > 5', '\t\treturn 0',
+			'\tnumber * 2'].join('\n'));
+		const results = new Map<number, TestRunnerNotification>([[2, { lineNumber: 2, state: 1, expression: 'Slow(2).Slow is 4',
+			methodName: 'Slow', durationMs: 30 }]]);
+		const counts = new Map([[3, 1, 0.01, 0.01], [4, 0, 0, 0], [5, 340, 25, 2]].map(([line, executions, ms, selfMs]) =>
+			[line, { file: 'Slow.strict', line, executions, ms, selfMs }]));
+		const marks = lineCoverageMarks(methods, results, new Set(), counts);
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 4), undefined);
+		assert.deepStrictEqual([3, 5].map((line) => formatInlineSlow(marks.find((mark) => mark.lineNumber === line)!, 10)),
+			[undefined, 'slow: 25ms (self 2.0ms, 340 times)']);
+		assert.ok(formatCoverageHover(marks.find((mark) => mark.lineNumber === 3)!).includes('Executed: 1 time'));
+	});
+
+	test('line counts of a coverage run never hide the lines of a Run program, tests do not call it', () => {
+		const methods = discoverStrictTests(['has logger', 'Run', '\tlogger.Log("Hi")'].join('\n'));
+		const results = new Map<number, TestRunnerNotification>([[1, { lineNumber: 1, state: 1, methodName: 'Run' }]]);
+		const counts = new Map([[2, { file: 'Hi.strict', line: 2, executions: 0, ms: 0, selfMs: 0 }]]);
+		assert.ok(lineCoverageMarks(methods, results, new Set(), counts).some((mark) => mark.lineNumber === 2));
 	});
 
 	test('unrun manual Run is not painted from parse errors', () => {

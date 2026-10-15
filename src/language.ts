@@ -1,11 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { copiedFrom, existingCalls, implementationCandidates, passingBodies, pendingTests, withImplementation } from './implementations';
-import { normalizeFsPath, strictDocumentSelector } from './paths';
+import { registerTypeFixes } from './codeActions';
+import { Evaluator } from './evaluate';
 import {
-	callBefore, chainBefore, Entry, isNamed, keywords, membersOf, parseType, resolve, Scope, scopeAt, StrictMethod, StrictType,
-	strictFiles, typeNamed
+	existingCalls, implementationCandidates, passingBodies, pendingTests, sharedRun, SharedRun, withImplementation
+} from './implementations';
+import { registerInsight } from './insight';
+import { calledMethods, expectedType, fits, typeText } from './insightModel';
+import { registerNavigation } from './navigation';
+import { normalizeFsPath, strictDocumentSelector } from './paths';
+import { registerRefactorings } from './refactoringProviders';
+import {
+	callBefore, chainBefore, Entry, isNamed, keywords, localOf, membersOf, parseType, resolve, Scope, scopeAt,
+	strictFiles, StrictMethod, StrictParameter, StrictType, typeNamed
 } from './strictIndex';
 
 export const alreadyExists = 'MethodAlreadyExists';
@@ -19,19 +27,19 @@ type Found = { entries: Entry[]; type?: StrictType; line?: number; text?: string
 export class StrictLanguage implements vscode.Disposable {
 	private readonly parsed = new Map<string, { modified: number; type: StrictType }>();
 	private readonly existing = vscode.languages.createDiagnosticCollection('strict existing');
-	private readonly runs = new Map<string, Promise<string[]>>();
+	private readonly runs = new Map<string, SharedRun>();
 	private readonly timers = new Map<string, NodeJS.Timeout>();
 	private readonly disposables: vscode.Disposable[];
 	private all: StrictType[] = [];
 	private scanned = 0;
 
-	constructor(private readonly root: () => string | undefined) {
+	constructor(public readonly root: () => string | undefined, private readonly project: (file: string) => string) {
 		const watcher = vscode.workspace.createFileSystemWatcher('**/*.strict');
 		const rescan = () => this.scanned = 0;
 		this.disposables = [watcher, watcher.onDidCreate(rescan), watcher.onDidChange(rescan), watcher.onDidDelete(rescan),
 			this.existing,
-			vscode.languages.registerCompletionItemProvider(strictDocumentSelector,
-				{ provideCompletionItems: (document, position) => this.complete(document, position) }, '.'),
+			vscode.languages.registerCompletionItemProvider(strictDocumentSelector, { provideCompletionItems: (document, position,
+				_token, context) => this.complete(document, position, context.triggerCharacter) }, '.', ' '),
 			vscode.languages.registerHoverProvider(strictDocumentSelector,
 				{ provideHover: (document, position) => this.hover(document, position) }),
 			vscode.languages.registerDefinitionProvider(strictDocumentSelector,
@@ -45,7 +53,14 @@ export class StrictLanguage implements vscode.Disposable {
 				{ provideInlineCompletionItems: (document, position, _context, token) => this.suggest(document, position, token) }),
 			vscode.workspace.onDidOpenTextDocument((document) => this.scheduleCheck(document)),
 			vscode.workspace.onDidChangeTextDocument((event) => this.scheduleCheck(event.document)),
-			vscode.workspace.onDidCloseTextDocument((document) => this.existing.delete(document.uri))
+			vscode.workspace.onDidCloseTextDocument((document) => this.existing.delete(document.uri)),
+			vscode.workspace.onDidChangeConfiguration((event) => event.affectsConfiguration('strict.checkExistingMethods') &&
+				vscode.workspace.textDocuments.forEach((document) => this.scheduleCheck(document))),
+			new Evaluator(root, project, (document, line) => this.scope(document, line)),
+			...registerNavigation(this),
+			...registerInsight((document) => this.types(document), this.root),
+			registerTypeFixes((document) => this.types(document)),
+			...registerRefactorings(root, (document, line) => this.scope(document, line))
 		];
 		vscode.workspace.textDocuments.forEach((document) => this.scheduleCheck(document));
 	}
@@ -56,7 +71,7 @@ export class StrictLanguage implements vscode.Disposable {
 	}
 
 	// ponytail: synchronous walk of the workspace and Strict folders, slow for huge workspaces; upgrade: workspace.findFiles
-	private allTypes(): StrictType[] {
+	public allTypes(): StrictType[] {
 		if (Date.now() - this.scanned > rescanMs) {
 			const root = this.root();
 			const folders = [...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath), ...(root ? [root] : [])];
@@ -86,22 +101,31 @@ export class StrictLanguage implements vscode.Disposable {
 		}
 	}
 
-	private scope(document: vscode.TextDocument, line: number): Scope {
+	private scope(document: vscode.TextDocument, line: number, withLine = false): Scope {
 		const { own, types } = this.types(document);
-		return scopeAt(types, own, document.getText().split(/\r?\n/), line);
+		return scopeAt(types, own, document.getText().split(/\r?\n/), line, withLine);
 	}
 
-	private complete(document: vscode.TextDocument, position: vscode.Position): vscode.CompletionItem[] {
-		const scope = this.scope(document, position.line);
+	/** Items of the expected type come first, `has ` completes member names on the space. */
+	private complete(document: vscode.TextDocument, position: vscode.Position, trigger?: string): vscode.CompletionItem[] {
 		const before = document.lineAt(position.line).text.slice(0, position.character).replace(/\w*$/, '');
+		if (trigger === ' ' && before !== 'has ') {
+			return [];
+		}
+		const scope = this.scope(document, position.line);
+		const expected = expectedType(before, scope, position.line);
 		if (before.endsWith('.')) {
-			const receiver = resolve(chainBefore(before.slice(0, -1)), scope);
-			return receiver ? unique(membersOf(receiver, scope.types)).map((entry) => entryItem(entry, receiver.isType))
-				: anyMethodItems(scope.types);
+			const chain = chainBefore(before.slice(0, -1));
+			const receiver = resolve(chain, scope);
+			return receiver ? ranked(unique(membersOf(receiver, scope.types)).map((entry) => entryItem(entry, receiver.isType)),
+				`${chain}.`, expected, scope) : anyMethodItems(scope.types);
 		}
 		const root = this.root();
-		const typeItems = unique(scope.types.map((type) => ({ owner: type, name: type.name }))).map((entry) =>
-			item(entry.name, vscode.CompletionItemKind.Class, relativeFile(entry.owner.file, root), '2'));
+		const typeItems = unique(scope.types.map((type) => ({ owner: type, name: type.name }))).map((entry) => {
+			const completion = item(entry.name, vscode.CompletionItemKind.Class, relativeFile(entry.owner.file, root), '2');
+			completion.documentation = appendType(new vscode.MarkdownString(), entry.owner);
+			return completion;
+		});
 		if (before === 'has ') {
 			return unique(scope.types.map((type) => ({ owner: type, name: type.name[0].toLowerCase() + type.name.slice(1) })))
 				.map((entry) => item(entry.name, vscode.CompletionItemKind.Field, `has ${entry.name} (${entry.owner.name})`, '1'));
@@ -110,14 +134,14 @@ export class StrictLanguage implements vscode.Disposable {
 			return [...['has', 'constant', 'mutable'].map((name) => item(name, vscode.CompletionItemKind.Keyword, '', '0')), ...typeItems];
 		}
 		const ownMembers = membersOf({ type: scope.own }, scope.types).filter((entry) => entry.owner === scope.own);
-		return [
+		return ranked([
 			...(scope.method?.parameters ?? []).map((parameter) =>
 				item(parameter.name, vscode.CompletionItemKind.Variable, `${parameter.name} ${parameter.type}`, '0')),
 			...[...scope.locals.keys()].map((name) => item(name, vscode.CompletionItemKind.Variable, 'local', '0')),
 			...ownMembers.map((entry) => entryItem(entry)),
-			...['value', 'index', ...keywords].map((name) => item(name, vscode.CompletionItemKind.Keyword, '', '3')),
+			...['value', 'index', 'true', 'false', ...keywords].map((name) => item(name, vscode.CompletionItemKind.Keyword, '', '3')),
 			...typeItems
-		];
+		], '', expected, scope);
 	}
 
 	private find(document: vscode.TextDocument, position: vscode.Position): (Found & { range: vscode.Range }) | undefined {
@@ -126,7 +150,7 @@ export class StrictLanguage implements vscode.Disposable {
 			return undefined;
 		}
 		const word = document.getText(range);
-		const scope = this.scope(document, position.line);
+		const scope = this.scope(document, position.line, true);
 		const before = document.lineAt(position.line).text.slice(0, range.start.character);
 		if (before.endsWith('.')) {
 			const receiver = resolve(chainBefore(before.slice(0, -1)), scope);
@@ -137,12 +161,17 @@ export class StrictLanguage implements vscode.Disposable {
 		}
 		const parameter = scope.method?.parameters.find((candidate) => candidate.name === word);
 		const local = scope.locals.get(word);
+		if (!parameter && !local && scope.method && (word === 'value' || word === 'index')) {
+			const type = resolve(word, scope);
+			return type && { range, entries: [], text: `${word} ${typeText(type)}` };
+		}
+		const type = local && resolve(word, scope);
 		const lines = document.getText().split(/\r?\n/);
 		const localLine = local && scope.method ? lines.findIndex((text, index) => index > scope.method!.line &&
-			new RegExp(`^\\t+(let|constant|mutable|for) ${word}\\b`).test(text)) : -1;
+			localOf(text)?.name === word) : -1;
 		if (parameter || local) {
-			return { range, entries: [], line: parameter ? scope.method!.line : localLine,
-				text: parameter ? `${word} ${parameter.type}` : `${word} = ${local!.expression}` };
+			return { range, entries: [], line: parameter ? scope.method!.line : localLine, text: parameter ? `${word} ${parameter.type}`
+				: `${word}${type ? ` ${typeText(type)}` : ''} ${local!.keyword === 'for' ? 'in' : '='} ${local!.expression}` };
 		}
 		const entries = membersOf({ type: scope.own }, scope.types).filter((entry) => entry.name === word);
 		return entries.length > 0 ? { range, entries } : { range, entries: [], type: typeNamed(word, scope.types)?.type };
@@ -158,9 +187,7 @@ export class StrictLanguage implements vscode.Disposable {
 			appendEntry(markdown, entry);
 		}
 		if (found?.type) {
-			markdown.appendCodeblock([...found.type.members.map((member) => member.text),
-				...found.type.methods.map((method) => method.header)].join('\n'), 'strict');
-			markdown.appendMarkdown(link(found.type.file, 0));
+			appendType(markdown, found.type);
 		}
 		return markdown.value ? new vscode.Hover(markdown, found!.range) : undefined;
 	}
@@ -180,14 +207,7 @@ export class StrictLanguage implements vscode.Disposable {
 		if (!call) {
 			return undefined;
 		}
-		const scope = this.scope(document, position.line);
-		const dot = call.callee.lastIndexOf('.');
-		const name = call.callee.slice(dot + 1);
-		const receiver = dot > 0 ? resolve(call.callee.slice(0, dot), scope) : { type: scope.own };
-		const type = dot < 0 ? typeNamed(name, scope.types)?.type : undefined;
-		const methods = type ? constructors(type) : (receiver ? membersOf(receiver, scope.types)
-			: scope.types.flatMap((candidate) => membersOf({ type: candidate }, []))).flatMap((entry) =>
-			entry.name === name && entry.method ? [entry.method] : []).slice(0, 10);
+		const methods = calledMethods(call.callee, this.scope(document, position.line), true).slice(0, 10);
 		const help = new vscode.SignatureHelp();
 		help.signatures = methods.map((method) => {
 			const signature = new vscode.SignatureInformation(method.header, testsMarkdown(method));
@@ -216,7 +236,7 @@ export class StrictLanguage implements vscode.Disposable {
 		Promise<vscode.InlineCompletionItem[]> {
 		const indent = document.lineAt(position.line).text;
 		const root = this.root();
-		if (!root || document.uri.scheme !== 'file' || !/^\t?$/.test(indent)) {
+		if (!root || document.uri.scheme !== 'file' || !/^\t?$/.test(indent) || !isEnabled('suggestImplementations')) {
 			return [];
 		}
 		const { own, types } = this.types(document);
@@ -224,24 +244,23 @@ export class StrictLanguage implements vscode.Disposable {
 		if (!method || !pendingTests(method)) {
 			return [];
 		}
-		const passing = await this.passing(root, document, method, implementationCandidates(method, own, types));
+		const passing = await this.passing(root, document, method, implementationCandidates(method, own, types), token);
 		return token.isCancellationRequested ? [] : passing.map((body) =>
 			new vscode.InlineCompletionItem(`\t${body}`, new vscode.Range(position.line, 0, position.line, indent.length)));
 	}
 
-	/** Bodies passing all tests of method, cached while the rest of the file stays the same. */
-	private passing(root: string, document: vscode.TextDocument, method: StrictMethod, bodies: string[]): Promise<string[]> {
+	/** Bodies passing all tests of method, cached while the rest of the file stays the same, see sharedRun. */
+	private passing(root: string, document: vscode.TextDocument, method: StrictMethod, bodies: string[],
+		token?: vscode.CancellationToken): Promise<string[]> {
 		const source = document.getText();
-		const key = `${withImplementation(source, method, '')}\n${bodies.join('\n')}`;
-		if (!this.runs.has(key)) {
-			const run = passingBodies(root, document.fileName, source, method, bodies);
-			run.catch(() => this.runs.delete(key));
-			this.runs.set(key, run);
-			if (this.runs.size > cachedRuns) {
-				this.runs.delete(this.runs.keys().next().value!);
-			}
+		const passing = sharedRun(this.runs, `${withImplementation(source, method, '')}\n${bodies.join('\n')}`,
+			() => token?.isCancellationRequested === true,
+			(isCancelled) => passingBodies(root, this.project(document.fileName), document.fileName, source, method, bodies,
+				isCancelled));
+		if (this.runs.size > cachedRuns) {
+			this.runs.delete(this.runs.keys().next().value!);
 		}
-		return this.runs.get(key)!;
+		return passing;
 	}
 
 	private scheduleCheck(document: vscode.TextDocument): void {
@@ -252,7 +271,7 @@ export class StrictLanguage implements vscode.Disposable {
 		}
 	}
 
-	/** Reports methods an existing method passes all tests of, or that copy one, verified like the suggestions. */
+	/** Reports methods an existing method passes all tests of, verified like the suggestions, `strict check` reports copies. */
 	private async check(document: vscode.TextDocument): Promise<void> {
 		const root = this.root();
 		const version = document.version;
@@ -261,23 +280,27 @@ export class StrictLanguage implements vscode.Disposable {
 		}
 		const { own, types } = this.types(document);
 		const diagnostics: vscode.Diagnostic[] = [];
-		for (const method of own.methods.filter((candidate) => isNamed(candidate.name) && candidate.name !== 'Run' &&
+		const checked = isEnabled('checkExistingMethods') ? own.methods : [];
+		for (const method of checked.filter((candidate) => isNamed(candidate.name) && candidate.name !== 'Run' &&
 			candidate.implementation.length > 0 && !pendingTests(candidate))) {
-			const calls = method.tests.length > 0 ? existingCalls(method, own, types) : [];
+			const calls = method.tests.length > 0 ? existingCalls(method, own, types).filter((existing) =>
+				existing.method.implementation.join('\n') !== method.implementation.join('\n')) : [];
 			const passing = calls.length > 0 ? await this.passing(root, document, method, calls.map((existing) => existing.call!)) : [];
 			const verified = calls.find((existing) => passing.includes(existing.call!));
-			const copy = verified ?? copiedFrom(method, own, types);
 			const tests = method.tests.length === 1 ? 'the test' : `all ${method.tests.length} tests`;
-			if (copy) {
-				diagnostics.push(existingDiagnostic(method, copy.owner, copy.method, verified
-					? `\`${verified.call}\` passes ${tests} of ${method.name}, use it instead`
-					: `${method.name} copies it, use it instead`));
+			if (verified) {
+				diagnostics.push(existingDiagnostic(method, verified.owner, verified.method,
+					`\`${verified.call}\` passes ${tests} of ${method.name}, use it instead`));
 			}
 		}
 		if (document.version === version && !document.isClosed) {
 			this.existing.set(document.uri, diagnostics);
 		}
 	}
+}
+
+function isEnabled(setting: 'suggestImplementations' | 'checkExistingMethods'): boolean {
+	return vscode.workspace.getConfiguration('strict').get<boolean>(setting, true);
 }
 
 function existingDiagnostic(method: StrictMethod, owner: StrictType, existing: StrictMethod, detail: string): vscode.Diagnostic {
@@ -301,16 +324,6 @@ function symbols(document: vscode.TextDocument): vscode.DocumentSymbol[] {
 	];
 }
 
-function constructors(type: StrictType): StrictMethod[] {
-	const from = type.methods.filter((method) => method.name === 'from');
-	const members = type.members.filter((member) => !member.text.startsWith('constant '));
-	return from.length > 0 ? from.map((method) => ({ ...method, header: type.name + method.header.slice(4) })) : [{
-		name: type.name, header: `${type.name}(${members.map((member) => member.name).join(', ')})`, line: 0, endLine: 0,
-		parameters: members.map((member) => ({ name: member.name, type: member.type, optional: false })), returns: type.name,
-		tests: [], implementation: []
-	}];
-}
-
 function unique<T extends { name: string }>(entries: T[]): T[] {
 	const names = new Set<string>();
 	return entries.filter((entry) => !names.has(entry.name) && names.add(entry.name));
@@ -328,14 +341,26 @@ function entryItem(entry: Entry, isType = false): vscode.CompletionItem {
 	const completion = item(entry.name, entry.method ? vscode.CompletionItemKind.Method : isConstant
 		? vscode.CompletionItemKind.Constant : vscode.CompletionItemKind.Field, `${entry.owner.name}.${entry.method?.header ??
 		entry.member!.text.replace(/^\w+ /, '')}`, isType && isConstant ? '0' : '1');
-	const required = entry.method?.parameters.filter((parameter) => !parameter.optional) ?? [];
+	completion.documentation = appendEntry(new vscode.MarkdownString(), entry);
+	return withArguments(completion, entry.name, entry.method?.parameters ?? []);
+}
+
+/** Inserts `name(${1:first}, ...)` with the required parameters and shows their signature. */
+function withArguments(completion: vscode.CompletionItem, name: string, parameters: StrictParameter[]): vscode.CompletionItem {
+	const required = parameters.filter((parameter) => !parameter.optional);
 	if (required.length > 0) {
-		completion.insertText = new vscode.SnippetString(`${entry.name}(${required.map((parameter, index) =>
+		completion.insertText = new vscode.SnippetString(`${name}(${required.map((parameter, index) =>
 			`\${${index + 1}:${parameter.name}}`).join(', ')})`);
 		completion.command = { command: 'editor.action.triggerParameterHints', title: 'Parameters' };
 	}
-	completion.documentation = appendEntry(new vscode.MarkdownString(), entry);
 	return completion;
+}
+
+function ranked(items: vscode.CompletionItem[], prefix: string, expected: string | undefined, scope: Scope):
+	vscode.CompletionItem[] {
+	items.filter((completion) => fits(`${prefix}${completion.label}`, expected, scope)).forEach((completion) =>
+		completion.sortText = `!${completion.sortText}`);
+	return items;
 }
 
 function anyMethodItems(types: StrictType[]): vscode.CompletionItem[] {
@@ -354,6 +379,12 @@ function appendEntry(markdown: vscode.MarkdownString, entry: Entry): vscode.Mark
 	markdown.appendCodeblock(entry.method ? [entry.method.header, ...entry.method.tests.map((test) => `\t${test}`)].join('\n')
 		: entry.member!.text, 'strict');
 	return markdown.appendMarkdown(link(entry.owner.file, entry.method?.line ?? entry.member!.line));
+}
+
+function appendType(markdown: vscode.MarkdownString, type: StrictType): vscode.MarkdownString {
+	markdown.appendCodeblock([...type.members.map((member) => member.text), ...type.methods.map((method) => method.header)]
+		.join('\n'), 'strict');
+	return markdown.appendMarkdown(link(type.file, 0));
 }
 
 function testsMarkdown(method: StrictMethod): vscode.MarkdownString | undefined {

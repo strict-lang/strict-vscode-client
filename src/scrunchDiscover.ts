@@ -5,6 +5,7 @@ export type DiscoveredTest = {
 
 export type DiscoveredMethod = {
 	name: string;
+	header: string;
 	lineNumber: number;
 	tests: DiscoveredTest[];
 	implementation: DiscoveredTest[];
@@ -35,8 +36,8 @@ export function discoverStrictTests(source: string): DiscoveredMethod[] {
 			}
 			const stripped = line.replace(/^[\t ]+/, '');
 			const indent = line.length - stripped.length;
-			if (indent === 1 && stripped.length > 0) {
-				current.body.push({ expression: stripped, lineNumber });
+			if (stripped.length > 0) {
+				(indent === 1 ? current.body : current.implementation).push({ expression: stripped, lineNumber });
 			}
 			continue;
 		}
@@ -45,7 +46,7 @@ export function discoverStrictTests(source: string): DiscoveredMethod[] {
 			continue;
 		}
 		current = {
-			name: methodName(line), lineNumber, tests: [], implementation: [], body: [],
+			name: methodName(line), header: line, lineNumber, tests: [], implementation: [], body: [],
 			runnable: isRunnableHeader(line)
 		};
 		methods.push(current);
@@ -53,10 +54,11 @@ export function discoverStrictTests(source: string): DiscoveredMethod[] {
 	for (const method of methods) {
 		method.tests = inferTests(method.body);
 		const testLines = new Set(method.tests.map((test) => test.lineNumber));
-		method.implementation = method.body.filter((line) => !testLines.has(line.lineNumber));
+		method.implementation = [...method.body.filter((line) => !testLines.has(line.lineNumber)), ...method.implementation]
+			.sort((first, second) => first.lineNumber - second.lineNumber);
 	}
-	return methods.map(({ name, lineNumber, tests, implementation, runnable }) => ({
-		name, lineNumber, tests, implementation, runnable
+	return methods.map(({ name, header, lineNumber, tests, implementation, runnable }) => ({
+		name, header, lineNumber, tests, implementation, runnable
 	}));
 }
 
@@ -78,17 +80,23 @@ function methodName(header: string): string {
 	return match?.[1] ?? header;
 }
 
+/** Leading lines before the last one, a `constant` directly followed by a test belongs to the tests like in Strict. */
 function inferTests(body: DiscoveredTest[]): DiscoveredTest[] {
+	const candidates = body.slice(0, -1);
 	const tests: DiscoveredTest[] = [];
-	for (const line of body.slice(0, -1)) {
-		if (implementationStart.test(line.expression) || isImplementationUsingMembers(line.expression)) {
+	for (const [index, line] of candidates.entries()) {
+		const isConstant = line.expression.startsWith('constant ') && isTest(candidates[index + 1]?.expression ?? '');
+		if (!isConstant && !isTest(line.expression)) {
 			break;
 		}
-		tests.push(line);
+		tests.push(...isConstant ? [] : [line]);
 	}
 	return tests;
 }
 
-function isImplementationUsingMembers(expression: string): boolean {
-	return memberIdentifier.test(expression) && !/\bis\b/.test(expression);
+// ponytail: Strict takes Boolean leading lines, without types a test is a line not starting with a member, parameter or
+// keyword (tests can not use them) and not using value or other; upgrade: the test lines from Strict
+export function isTest(expression: string): boolean {
+	return !implementationStart.test(expression) && !/^(?!(not|true|false)\b)[a-z]/.test(expression) &&
+		!(memberIdentifier.test(expression) && !/\bis\b/.test(expression));
 }

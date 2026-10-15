@@ -8,23 +8,17 @@ export type TestRunnerNotification = {
 	message?: string;
 	details?: string;
 	durationMs?: number;
+	previousMs?: number;
 	stackTrace?: string;
 	cached?: boolean;
+	/** From the native build of a coverage run, faster than usual, so its time is not remembered. */
+	native?: boolean;
 	consoleOutput?: string;
 	expected?: string;
 	actual?: string;
-	methodsCalled?: number;
-	linesCalled?: number;
-	callCount?: number;
-	lastRunAt?: string;
 };
 
 export type MethodOutput = {
-	durationMs?: number;
-	lastRunAt?: string;
-	methodsCalled?: number;
-	linesCalled?: number;
-	callCount?: number;
 	consoleOutput?: string;
 	details?: string;
 	expected?: string;
@@ -32,7 +26,6 @@ export type MethodOutput = {
 	stackTrace?: string;
 	message?: string;
 	failed?: boolean;
-	cached?: boolean;
 };
 
 export type StackFrame = {
@@ -58,6 +51,11 @@ export function formatDuration(durationMs: number | undefined): string | undefin
 		return `${Math.round(durationMs)}ms`;
 	}
 	return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+/** One line per method in the test output, place (path:line) is a link in it, a cached result has no time. */
+export function methodLine(name: string, failed: boolean, durationMs: number | undefined, place: string): string {
+	return `${failed ? '✗' : '✓'} ${name} ${formatDuration(durationMs) ?? 'cached'} at ${place}`;
 }
 
 export function parseStackFrames(text: string | undefined): StackFrame[] {
@@ -139,24 +137,28 @@ export function formatErrorSummary(message: string | undefined): string | undefi
 	}
 	const withoutType = first.replace(/^[A-Za-z][\w.+]*:\s+/, '');
 	const text = withoutType || first;
-	const cut = text.indexOf(':');
+	const cut = text.indexOf(': ');
 	if (cut > 0 && cut < 48) {
 		return text.slice(0, cut);
 	}
 	return text.length > 72 ? `${text.slice(0, 69)}...` : text;
 }
 
-export function formatLastRun(lastRunAt: string | undefined): string | undefined {
-	if (!lastRunAt) {
+/** formatMethodOutput of a method of file unless printed has it: a crash once for all files (every type using the broken one
+ * stops with it), what a type printed once per file, every failed comparison. */
+export function unprintedOutput(output: MethodOutput, file: string, printed: Set<string>): string | undefined {
+	const text = formatMethodOutput(output);
+	const key = output.expected !== undefined ? undefined : output.failed ? text : `${file}\n${text}`;
+	if (!text || key !== undefined && printed.has(key)) {
 		return undefined;
 	}
-	const date = new Date(lastRunAt);
-	if (Number.isNaN(date.getTime())) {
-		return lastRunAt;
+	if (key !== undefined) {
+		printed.add(key);
 	}
-	return date.toLocaleString();
+	return text;
 }
 
+/** What the tests of a method printed and why they failed, nothing for a silent pass (durations are in the Testing view). */
 export function formatMethodOutput(output: MethodOutput): string {
 	const lines: string[] = [];
 	const consoleText = output.consoleOutput?.replace(/\r\n/g, '\n').trim();
@@ -185,24 +187,6 @@ export function formatMethodOutput(output: MethodOutput): string {
 			lines.push('');
 			lines.push(output.stackTrace);
 		}
-		lines.push('');
-	}
-	const duration = output.cached ? 'cached' : formatDuration(output.durationMs);
-	if (duration) {
-		lines.push(`Duration: ${duration}`);
-	}
-	const lastRun = formatLastRun(output.lastRunAt);
-	if (lastRun) {
-		lines.push(`Last run: ${lastRun}`);
-	}
-	if (output.methodsCalled !== undefined) {
-		lines.push(`Methods called: ${output.methodsCalled}`);
-	}
-	if (output.linesCalled !== undefined) {
-		lines.push(`Lines called: ${output.linesCalled}`);
-	}
-	if (output.callCount !== undefined) {
-		lines.push(`Called: ${output.callCount} time${output.callCount === 1 ? '' : 's'}`);
 	}
 	return lines.join('\n').trim();
 }

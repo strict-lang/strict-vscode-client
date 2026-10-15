@@ -1,59 +1,112 @@
-import { spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
+import * as fs from 'fs';
 import * as path from 'path';
 import { compilerFile, normalizeFsPath } from './paths';
 import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
 import { TestRunnerNotification } from './testResults';
 
-export type StrictRun = { exitCode: number; output: string; durationMs: number; times?: number[] };
+export type StrictRun = { exitCode: number; output: string; durationMs: number };
+export type RunOptions = { signal?: AbortSignal; timeoutMs?: number; cwd?: string };
 export type CheckIssue = { file: string; line: number; rule: string; target: string };
+export type LineCount = { file: string; line: number; executions: number; ms: number; selfMs: number };
 
-const timeoutMs = 60000;
+const defaultTimeoutMs = 60000;
 const summaryLine = /^(All tests passed|\d+ (tests )?failed) in /m;
-const failureLine = /^Test failed: (.*) in (\S+?)(?: at .+:line (\d+))?$/;
-const passedLine = /^Test passed: .* at .+:line (\d+)$/;
+const builtLine = /^Built .+\.test(\.exe)?$/;
+const lineCount = /^Line (.+?\.strict):(\d+) executed (\d+) times in (\d+(?:\.\d+)?) ms \(self (-?\d+(?:\.\d+)?) ms\)$/;
+const testLine = /^Test (passed|failed): (.*) in (\S+?)(?: at .+:line (\d+))?$/;
+const stackLine = /^\s+at .+ in .+:line \d+$/;
 const issuePattern = /^(.+?\.strict):line (\d+): (\w+): (.*)$/;
 const errorLocation = /^\w+: .* in (.+?\.strict):(\d+)/m;
 export const testDuration = / \((\d+(?:\.\d+)?) ms\)$/;
 
-/** Runs root/strict with root as working directory, root arguments are always ".". */
-export function runStrict(root: string, args: string[]): Promise<StrictRun> {
-	return runProcess(path.join(root, compilerFile), args, root);
+/** Runs root/strict in options.cwd, the project folder of the file it gets (see projectFolder), else in root. */
+export function runStrict(root: string, args: string[], options: RunOptions = {}): Promise<StrictRun> {
+	return runProcess(path.join(root, compilerFile), args, options.cwd ?? root, options);
 }
 
-/** Runs file, times[i] is when output line i arrived in ms since the start (stdout streams while tests run). */
-export function runProcess(file: string, args: string[], cwd: string): Promise<StrictRun> {
+const ignoring = new Map<string, Promise<Set<string>>>();
+
+/** Untracked files and folders git ignores in folder, normalized for isIgnoredBy, else in the repositories directly in it, never
+ * folder itself (opened on purpose), calls while one runs for folder share it. */
+export function gitIgnored(folder: string): Promise<Set<string>> {
+	const running = ignoring.get(folder) ?? listIgnored(folder).finally(() => ignoring.delete(folder));
+	ignoring.set(folder, running);
+	return running;
+}
+
+async function listIgnored(folder: string): Promise<Set<string>> {
+	const run = await runProcess('git', ['ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'], folder);
+	if (run.exitCode !== 0) {
+		const repositories = (await fs.promises.readdir(folder).catch(() => [])).filter((name) =>
+			fs.existsSync(path.join(folder, name, '.git')));
+		const sets = await Promise.all(repositories.map((name) => gitIgnored(path.join(folder, name))));
+		return new Set(sets.flatMap((set) => [...set]));
+	}
+	return new Set(run.output.split('\0').filter((entry) => entry && entry !== './').map((entry) =>
+		normalizeFsPath(path.resolve(folder, entry))));
+}
+
+/** Runs file in cwd, killed with the processes it started when signal aborts or after the timeout. */
+export function runProcess(file: string, args: string[], cwd: string, options: RunOptions = {}): Promise<StrictRun> {
 	const started = performance.now();
 	return new Promise((resolve) => {
-		const child = spawn(file, args, { cwd, windowsHide: true });
-		const times: number[] = [];
+		const child = startProcess(file, args, cwd);
 		let stdout = '';
 		let stderr = '';
 		let failure = '';
-		const timer = setTimeout(() => {
-			failure = `Timed out after ${timeoutMs / 1000} s`;
-			child.kill();
-		}, timeoutMs);
-		child.stdout.setEncoding('utf8').on('data', (text: string) => {
-			const now = performance.now() - started;
-			stdout += text;
-			for (let index = text.indexOf('\n'); index >= 0; index = text.indexOf('\n', index + 1)) {
-				times.push(now);
-			}
-		});
-		child.stderr.setEncoding('utf8').on('data', (text: string) => stderr += text);
+		const stop = (reason: string) => {
+			failure = reason;
+			stopProcess(child);
+		};
+		const timeout = options.timeoutMs ?? defaultTimeoutMs;
+		const timer = setTimeout(() => stop(`Timed out after ${timeout / 1000} s`), timeout);
+		const aborted = () => stop('Stopped');
+		options.signal?.addEventListener('abort', aborted, { once: true });
+		if (options.signal?.aborted) {
+			aborted();
+		}
+		child.stdout?.setEncoding('utf8').on('data', (text: string) => stdout += text);
+		child.stderr?.setEncoding('utf8').on('data', (text: string) => stderr += text);
 		child.on('error', (error) => failure = error.message);
 		child.on('close', (code) => {
 			clearTimeout(timer);
+			options.signal?.removeEventListener('abort', aborted);
 			resolve({ exitCode: failure || code === null ? -1 : code, output: stdout + stderr + failure,
-				durationMs: performance.now() - started, times });
+				durationMs: performance.now() - started });
 		});
 	});
 }
 
+/** file started in cwd as the leader of the processes it starts (elsewhere than Windows), for stopProcess. */
+export function startProcess(file: string, args: string[], cwd: string): ChildProcess {
+	return spawn(file, args, { cwd, windowsHide: true, detached: process.platform !== 'win32' });
+}
+
+/** Kills child started by startProcess unless it ended, with the processes it started: killing only child leaves them running. */
+export function stopProcess(child: ChildProcess): void {
+	if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) {
+		return;
+	}
+	if (process.platform === 'win32') {
+		spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).on('error', () => child.kill());
+	} else {
+		process.kill(-child.pid);
+	}
+}
+
+/** Why `strict test` printed no summary: the error it reports with its location, else what it printed and its exit code. */
 export function crashText(run: StrictRun): string | undefined {
-	return summaryLine.test(run.output)
-		? undefined
-		: `Strict crashed with exit code ${run.exitCode}${run.output.trim() ? '\n' + run.output.trim() : ''}`;
+	const printed = printedText(run.output);
+	return summaryLine.test(run.output) ? undefined : errorLocation.test(printed) ? printed
+		: `${printed ? printed + '\n' : ''}Strict crashed with exit code ${run.exitCode}`;
+}
+
+/** What Strict printed besides test results with their stacks, its summary, builds and line counts. */
+function printedText(output: string): string {
+	return output.split(/\r?\n/).map((line) => line.replace(testDuration, '')).filter((line) => line.trim() &&
+		!testLine.test(line) && !line.startsWith('  got: ') && !stackLine.test(line) && !summaryLine.test(line) &&
+		!builtLine.test(line) && !lineCount.test(line)).join('\n');
 }
 
 /** Zero based line of the error Strict reports for file, like `ParsingFailed: ... in Examples/Bad.strict:5`. */
@@ -62,49 +115,47 @@ export function crashLine(output: string, file: string, root: string): number | 
 	return match && normalizeFsPath(path.resolve(root, match[1])) === normalizeFsPath(file) ? Number(match[2]) - 1 : undefined;
 }
 
-/** One result per discovered test line from `strict test` output. */
+/** One result per test line Strict printed, every discovered test when it only printed a cached pass or crashed. */
 export function testResults(source: string, uri: string, run: StrictRun): TestRunnerNotification[] {
-	const printed = run.output.split(/\r?\n/).map((line) => testDuration.exec(line)?.[1]);
 	const lines = run.output.split(/\r?\n/).map((line) => line.replace(testDuration, ''));
 	const crash = crashText(run);
-	const consoleOutput = lines.filter((line) => line && !/^Test (passed|failed): /.test(line) &&
-		!line.startsWith('  got: ') && !summaryLine.test(line)).join('\n') || undefined;
-	const testLines = lines.flatMap((line, index) => /^Test (passed|failed): /.test(line) ? [index] : []);
-	// ponytail: without a printed duration a test takes the gap since the previous test line, the first one also compiled
-	const durationOf = (index: number) => {
-		const previous = testLines[testLines.indexOf(index) - 1];
-		return printed[index] !== undefined ? Number(printed[index]) : index >= 0 && previous !== undefined &&
-			run.times?.[index] !== undefined ? run.times[index] - run.times[previous] : undefined;
-	};
-	const passed = new Map(lines.flatMap((line, index) => {
-		const match = passedLine.exec(line);
-		return match ? [[Number(match[1]) - 1, index]] : [];
-	}));
-	const failures = lines.flatMap((line, index) => {
-		const match = failureLine.exec(line);
-		return match ? [{ index, expression: match[1], method: match[2], line: match[3] ? Number(match[3]) - 1 : undefined }] : [];
+	const consoleOutput = crash === undefined && printedText(run.output) || undefined;
+	const printed = run.output.split(/\r?\n/).flatMap((line, index) => {
+		const match = testLine.exec(lines[index]);
+		const duration = testDuration.exec(line)?.[1];
+		const actual = match?.[1] === 'failed' ? /^ {2}got: (.*)$/.exec(lines[index + 1] ?? '')?.[1] : undefined;
+		const stack = actual === undefined ? [] : lines.slice(index + 2);
+		const stackEnd = stack.findIndex((next) => !stackLine.test(next));
+		return match ? [{ index, failed: match[1] === 'failed', expression: match[2], method: match[3],
+			line: match[4] ? Number(match[4]) - 1 : undefined, durationMs: duration === undefined ? undefined : Number(duration),
+			actual, stackTrace: stack.slice(0, stackEnd < 0 ? undefined : stackEnd).map((next) => next.trim()).join('\n') || undefined }]
+			: [];
 	});
-	const reported = new Set<number>();
-	const methods = discoverStrictTests(source);
-	const results = methods.flatMap((method) => method.tests.map((test): TestRunnerNotification => {
-		const failed = failures.find((failure) => failure.line !== undefined ? failure.line === test.lineNumber
-			: failure.expression === test.expression && failure.method === method.name)?.index ?? -1;
-		reported.add(failed);
-		const actual = failed >= 0 ? /^ {2}got: (.*)$/.exec(lines[failed + 1] ?? '')?.[1] : undefined;
-		const expected = actual === undefined ? undefined : test.expression.slice(test.expression.lastIndexOf(' is ') + 4);
-		const crashed = crash !== undefined && failed < 0 && !passed.has(test.lineNumber);
+	const isCached = crash === undefined && printed.length === 0;
+	const result = (expression: string, lineNumber: number, methodName: string, found?: typeof printed[number]):
+		TestRunnerNotification => {
+		const crashed = !found && crash !== undefined;
+		const comparison = expression.lastIndexOf(' is ');
+		const expected = found?.actual === undefined ? undefined : comparison < 0 ? 'true' : expression.slice(comparison + 4);
 		return {
-			lineNumber: test.lineNumber, state: crashed || failed >= 0 ? 0 : 1, uri, methodName: method.name,
-			expression: test.expression, expected, actual, consoleOutput,
-			durationMs: durationOf(failed >= 0 ? failed : passed.get(test.lineNumber) ?? -1),
-			message: crashed ? crash : failed < 0 ? undefined : actual === undefined ? lines[failed] : `Expected ${expected}, got ${actual}`
+			lineNumber, state: crashed || found?.failed ? 0 : 1, uri, methodName, expression, expected, actual: found?.actual,
+			consoleOutput, cached: isCached || undefined, durationMs: found?.durationMs, stackTrace: found?.stackTrace,
+			message: crashed ? crash : !found?.failed ? undefined : found.actual === undefined ? lines[found.index]
+				: `Expected ${expected}, got ${found.actual}`
 		};
+	};
+	const reported = new Set<typeof printed[number]>();
+	const methods = discoverStrictTests(source);
+	const discovered = methods.flatMap((method) => method.tests.flatMap((test) => {
+		const found = printed.find((candidate) => candidate.line !== undefined ? candidate.line === test.lineNumber
+			: candidate.expression === test.expression && candidate.method === method.name);
+		if (found) {
+			reported.add(found);
+		}
+		return found || isCached || crash !== undefined ? [result(test.expression, test.lineNumber, method.name, found)] : [];
 	}));
-	const unmatched = failures.filter((failure) => !reported.has(failure.index));
-	return results.concat(unmatched.map((failure) => {
-		const lineNumber = failure.line ?? methods.find((method) => method.name === failure.method)?.lineNumber ?? 0;
-		return { lineNumber, state: 0, uri, methodName: failure.method, message: lines[failure.index], consoleOutput };
-	}));
+	return discovered.concat(printed.filter((test) => !reported.has(test)).map((test) => result(test.expression,
+		test.line ?? methods.find((method) => method.name === test.method)?.lineNumber ?? 0, test.method, test)));
 }
 
 /** Issues printed by `strict check` as `file:line N: Rule: target`, line is zero based. */
@@ -112,6 +163,16 @@ export function checkIssues(output: string, root: string): CheckIssue[] {
 	return output.split(/\r?\n/).flatMap((line) => {
 		const match = issuePattern.exec(line);
 		return match ? [{ file: path.resolve(root, match[1]), line: Number(match[2]) - 1, rule: match[3], target: match[4] }] : [];
+	});
+}
+
+/** Lines `strict test <file> lines` printed as `Line Foo.strict:12 executed 340 times in 1.25 ms (self 0.40 ms)`, ms includes
+ * the called methods, selfMs not, line is zero based. */
+export function lineCounts(output: string, root: string): LineCount[] {
+	return output.split(/\r?\n/).flatMap((line) => {
+		const match = lineCount.exec(line);
+		return match ? [{ file: path.resolve(root, match[1]), line: Number(match[2]) - 1, executions: Number(match[3]),
+			ms: Number(match[4]), selfMs: Math.max(0, Number(match[5])) }] : [];
 	});
 }
 

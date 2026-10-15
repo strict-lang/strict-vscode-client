@@ -1,6 +1,9 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import {
 	Diagnostic,
 	DiagnosticRelatedInformation,
+	DiagnosticTag,
 	Disposable,
 	languages,
 	Location,
@@ -13,8 +16,11 @@ import {
 	window,
 	workspace
 } from 'vscode';
-import { formatDiagnosticMessage } from './diagnosticMessages';
+import { formatDiagnosticMessage, ruleSource } from './diagnosticMessages';
 import { parseStackFrames } from './testResults';
+
+const ruleTargets = new Map<string, Uri>();
+const rulesSection = Uri.parse('https://github.com/strict-lang/Strict#rules-worth-knowing');
 
 export {
 	extractDiagnosticDetail,
@@ -47,21 +53,48 @@ export function expandDiagnosticRange(range: Range, document: TextDocument | und
 	return range;
 }
 
-export function polishDiagnostic(diagnostic: Diagnostic, uri: Uri): Diagnostic {
+export function polishDiagnostic(diagnostic: Diagnostic, uri: Uri, root?: string): Diagnostic {
 	const document = workspace.textDocuments.find((doc) => doc.uri.toString() === uri.toString());
 	const code = diagnosticCode(diagnostic);
 	const polished = new Diagnostic(
-		expandDiagnosticRange(diagnostic.range, document),
+		namedRange(expandDiagnosticRange(diagnostic.range, document), document, uri, diagnostic.message),
 		formatDiagnosticMessage(code, diagnostic.message),
 		diagnostic.severity
 	);
-	polished.code = diagnostic.code;
+	polished.code = code ? { value: code, target: ruleTarget(code, root) } : diagnostic.code;
 	polished.source =
 		diagnostic.source === 'Strict.Language' || !diagnostic.source ? 'strict' : diagnostic.source;
-	// Unnecessary fades the underline — never keep it on parse errors
-	polished.tags = undefined;
+	// Unnecessary fades the code, only for unused code, never on parse errors
+	polished.tags = code?.startsWith('Unused') ? [DiagnosticTag.Unnecessary] : undefined;
 	polished.relatedInformation = relatedInformation(diagnostic, uri);
 	return polished;
+}
+
+/** Only the name a rule reports on the line, an unused parameter fades alone instead of its whole method header. */
+function namedRange(range: Range, document: TextDocument | undefined, uri: Uri, name: string): Range {
+	const line = range.start.line;
+	const text = /^\w+$/.test(name) ? document?.lineAt(line).text ?? fileLine(uri.fsPath, line) : '';
+	const start = text ? text.search(new RegExp(`\\b${name}\\b`)) : -1;
+	return start < 0 ? range : new Range(line, start, line, start + name.length);
+}
+
+function fileLine(file: string, line: number): string {
+	try {
+		return fs.readFileSync(file, 'utf8').split(/\r?\n/)[line] ?? '';
+	} catch {
+		return '';
+	}
+}
+
+// ponytail: cached per rule and Strict folder, the strict copy bundled in the .vsix has no Validators folder
+/** The line of the Validators of the Strict folder in use reporting rule, else the rules section of the Strict README. */
+function ruleTarget(rule: string, root: string | undefined): Uri {
+	const key = `${root}|${rule}`;
+	if (!ruleTargets.has(key)) {
+		const source = root ? ruleSource(rule, path.join(root, 'Validators')) : undefined;
+		ruleTargets.set(key, source ? Uri.file(source.file).with({ fragment: `L${source.line + 1}` }) : rulesSection);
+	}
+	return ruleTargets.get(key)!;
 }
 
 function relatedInformation(diagnostic: Diagnostic, uri: Uri): DiagnosticRelatedInformation[] {

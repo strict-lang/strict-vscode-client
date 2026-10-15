@@ -2,7 +2,7 @@
   "name": "strict-language",
   "displayName": "Strict Language",
   "description": "Language support for Strict: completion, hover, go to definition, implementations suggested from your tests, errors for methods that already exist, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler. See https://strict-lang.org/",
-  "version": "0.1.0",
+  "version": "1.0.20261014",
   "publisher": "strict-lang",
   "repository": {
     "type": "git",
@@ -14,12 +14,13 @@
   },
   "license": "MIT",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.93.0"
   },
   "categories": [
     "Programming Languages",
     "Linters",
-    "Other"
+    "Other",
+    "Formatters"
   ],
   "keywords": [
     "strict",
@@ -27,7 +28,6 @@
     "scrunch"
   ],
   "activationEvents": [
-    "onLanguage:strict",
     "workspaceContains:**/*.strict"
   ],
   "main": "./out/extension.js",
@@ -35,37 +35,129 @@
     "commands": [
       {
         "command": "strict-vscode-client.runFile",
-        "title": "Strict: Run File",
+        "title": "Run File",
+        "category": "Strict",
         "icon": "$(play)"
       },
       {
         "command": "strict-vscode-client.run",
-        "title": "Strict: Run File with Arguments..."
+        "title": "Run File with Arguments...",
+        "category": "Strict",
+        "icon": "$(play-circle)"
       },
       {
         "command": "strict-vscode-client.scrunch.focus",
-        "title": "Show in Testing window"
+        "title": "Show in Testing window",
+        "category": "SCrunch"
       },
       {
         "command": "strict-vscode-client.scrunch.showLineTests",
-        "title": "SCrunch: Show Tests for Line"
+        "title": "Show Tests for Line",
+        "category": "SCrunch"
       },
       {
         "command": "strict-vscode-client.scrunch.slowestTests",
-        "title": "SCrunch: Show Slowest Tests",
+        "title": "Show Slowest Tests",
+        "category": "SCrunch",
         "icon": "$(watch)"
       },
       {
         "command": "strict-vscode-client.scrunch.timeAll",
-        "title": "SCrunch: Time All Tests (without cache)"
+        "title": "Time All Tests (without cache)",
+        "category": "SCrunch"
+      },
+      {
+        "command": "strict-vscode-client.buildNative",
+        "title": "Build Native Executable",
+        "category": "Strict",
+        "icon": "$(package)"
+      },
+      {
+        "command": "strict-vscode-client.updatePackages",
+        "title": "Update Packages",
+        "category": "Strict"
+      },
+      {
+        "command": "strict-vscode-client.selectRoot",
+        "title": "Select Strict Folder",
+        "category": "Strict"
+      },
+      {
+        "command": "strict-vscode-client.evaluate",
+        "title": "Evaluate",
+        "category": "Strict"
+      },
+      {
+        "command": "strict-vscode-client.getStarted",
+        "title": "Get Started",
+        "category": "Strict"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "start",
+        "title": "Get Started with Strict",
+        "description": "Write, run, test and build your first Strict program in a few minutes.",
+        "steps": [
+          {
+            "id": "website",
+            "title": "Meet Strict",
+            "description": "Strict is a simple language humans and computers can read, write and understand, every method starts with its tests. strict-lang.org explains it with examples.\n[Show strict-lang.org](command:simpleBrowser.show?%5B%22https%3A%2F%2Fstrict-lang.org%22%5D)",
+            "media": {
+              "image": "media/StrictBanner.png",
+              "altText": "Strict Programming Language"
+            },
+            "completionEvents": [
+              "onCommand:simpleBrowser.show"
+            ]
+          },
+          {
+            "id": "hello",
+            "title": "Hello World",
+            "description": "Create a Strict file, type `run` and press **Tab** for a `Run` method, save it as **Hello.strict**. Run it with **Ctrl+Shift+R** or **Run** above `Run`.\n[New Strict File](command:workbench.action.files.newUntitledFile?%7B%22languageId%22%3A%22strict%22%7D)",
+            "media": {
+              "markdown": "media/hello.md"
+            },
+            "completionEvents": [
+              "onCommand:strict-vscode-client.runFile"
+            ]
+          },
+          {
+            "id": "test",
+            "title": "Test",
+            "description": "Tests run on every save: the gutter shows passed and failed tests, failures are shown inline and in the Testing view. **Shift+Enter** evaluates a selection.\n[Open Testing](command:workbench.view.testing.focus)",
+            "media": {
+              "markdown": "media/test.md"
+            },
+            "completionEvents": [
+              "onCommand:workbench.view.testing.focus"
+            ]
+          },
+          {
+            "id": "build",
+            "title": "Build",
+            "description": "**Build Native** above `Run` (or **Strict: Build Native Executable**) runs the tests, then builds a native executable next to the file, on Windows also one for Linux through WSL.",
+            "media": {
+              "markdown": "media/build.md"
+            },
+            "completionEvents": [
+              "onCommand:strict-vscode-client.buildNative"
+            ]
+          }
+        ]
       }
     ],
     "menus": {
-      "editor/title": [
+      "editor/title/run": [
         {
           "command": "strict-vscode-client.runFile",
           "when": "resourceLangId == strict",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "strict-vscode-client.run",
+          "when": "resourceLangId == strict",
+          "group": "navigation@2"
         }
       ],
       "testing/item/gutter": [
@@ -118,6 +210,43 @@
         },
         {
           "command": "strict-vscode-client.scrunch.timeAll"
+        },
+        {
+          "command": "strict-vscode-client.buildNative",
+          "when": "resourceLangId == strict"
+        },
+        {
+          "command": "strict-vscode-client.updatePackages",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "strict-vscode-client.selectRoot"
+        },
+        {
+          "command": "strict-vscode-client.evaluate",
+          "when": "resourceLangId == strict && editorHasSelection"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "strict-vscode-client.runFile",
+          "when": "resourceExtname == .strict",
+          "group": "strict@1"
+        },
+        {
+          "command": "strict-vscode-client.run",
+          "when": "resourceExtname == .strict",
+          "group": "strict@2"
+        },
+        {
+          "command": "strict-vscode-client.buildNative",
+          "when": "resourceExtname == .strict",
+          "group": "strict@3"
+        },
+        {
+          "command": "strict-vscode-client.updatePackages",
+          "when": "explorerResourceIsFolder",
+          "group": "strict@4"
         }
       ]
     },
@@ -132,6 +261,11 @@
         "command": "editor.action.quickFix",
         "key": "alt+enter",
         "when": "editorTextFocus && editorHasCodeActionsProvider && resourceLangId == strict"
+      },
+      {
+        "command": "strict-vscode-client.evaluate",
+        "key": "shift+enter",
+        "when": "editorTextFocus && resourceLangId == strict && editorHasSelection"
       }
     ],
     "taskDefinitions": [
@@ -143,7 +277,7 @@
         "properties": {
           "file": {
             "type": "string",
-            "description": ".strict file with a Run method, relative to the workspace folder"
+            "description": ".strict file with a Run method (or the file or folder of command), relative to the workspace folder"
           },
           "args": {
             "type": "array",
@@ -151,35 +285,80 @@
               "type": "string"
             },
             "description": "Arguments passed to Run"
+          },
+          "command": {
+            "type": "string",
+            "enum": [
+              "test",
+              "check",
+              "build",
+              "update"
+            ],
+            "description": "strict command run on file instead of its Run method: test, check, build (native executable) or update (packages)"
           }
         }
       }
     ],
     "configurationDefaults": {
+      "files.exclude": {
+        "**/*.strictbinary": true,
+        "**/*.test": {
+          "when": "$(basename).strict"
+        },
+        "**/*.test.exe": true,
+        "**/*.exe": {
+          "when": "$(basename).strict"
+        },
+        "**/*.mlir": {
+          "when": "$(basename).strict"
+        },
+        "**/*.ll": {
+          "when": "$(basename).strict"
+        }
+      },
       "explorer.fileNesting.patterns": {
-        "*.strict": "${capture}.strictbinary"
+        "*.strict": "${capture}"
       },
       "[strict]": {
         "editor.insertSpaces": false,
         "editor.detectIndentation": false,
         "files.trimTrailingWhitespace": true,
         "files.insertFinalNewline": false,
-        "files.trimFinalNewlines": true
+        "files.trimFinalNewlines": true,
+        "editor.rulers": [
+          120
+        ]
       }
     },
     "configuration": {
       "title": "Strict",
       "properties": {
+        "strict.timeoutSeconds": {
+          "type": "number",
+          "default": 60,
+          "minimum": 1,
+          "markdownDescription": "SCrunch stops `strict test` of a type after this many seconds (long trainings on the Strict VM need more)."
+        },
         "strict.slowTestMilliseconds": {
           "type": "number",
           "default": 10,
           "minimum": 0,
-          "markdownDescription": "Tests (and all tests of a method, on its header) taking at least this long show `slow: …` after the line. Most types run all their tests in under 1 ms. **SCrunch: Show Slowest Tests** lists the slowest ones."
+          "markdownDescription": "Tests (and all tests of a method, on its header) and lines of a Run with Coverage taking at least this long show `slow: …` after the line and get the `slow` tag (filter the Testing view with `@strict.scrunch:slow`). Most types run all their tests in under 1 ms. **SCrunch: Show Slowest Tests** lists the slowest ones."
         },
         "strict.root": {
           "type": "string",
           "default": "",
           "markdownDescription": "Strict folder containing `strict.exe` and the base `.strict` types. Empty = the newest `strict` of the workspace or a sibling `Strict` repository, else the first on PATH, else the copy bundled in the .vsix."
+        },
+        "strict.suggestImplementations": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Suggest implementations from the tests of a method as ghost text, each one verified with `strict test` on a temporary copy of the file."
+        },
+        "strict.checkExistingMethods": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Report methods an existing method already does (`MethodAlreadyExists`), calls verified with `strict test` on a temporary copy of the file."
         }
       }
     },
@@ -202,6 +381,41 @@
         "scopeName": "source.strict",
         "path": "./syntaxes/strict.tmLanguage"
       }
+    ],
+    "snippets": [
+      {
+        "language": "strict",
+        "path": "./snippets/strict.json"
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "strict",
+        "label": "Strict check issues, failed tests and errors",
+        "owner": "strict-task",
+        "source": "strict",
+        "severity": "error",
+        "fileLocation": [
+          "autoDetect",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^(?=\\s*(?:(?:(?! (?:at|in) ).)+?\\.strict:line \\d+: )?(.*?)(?: (?:at|in) (?:(?! (?:at|in) ).)+?\\.strict:(?:line )?\\d+.*)?$)(?:Test failed: .*? at |\\w+: .*? in |\\s+at \\S+ in )?((?:(?! (?:at|in) ).)+?\\.strict):(?:line )?(\\d+)",
+          "message": 1,
+          "file": 2,
+          "line": 3
+        }
+      }
+    ],
+    "semanticTokenModifiers": [
+      {
+        "id": "mutable",
+        "description": "Mutable members and variables of Strict, their value changes"
+      },
+      {
+        "id": "test",
+        "description": "Names on the test lines of a Strict method"
+      }
     ]
   },
   "scripts": {
@@ -215,7 +429,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^25.3.0",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "~1.93.0",
     "@typescript-eslint/eslint-plugin": "^8.56.0",
     "@typescript-eslint/parser": "^8.56.0",
     "@vscode/test-electron": "^2.5.2",

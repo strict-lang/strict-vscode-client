@@ -10,8 +10,10 @@ export type StrictType = { name: string; file: string; members: StrictMember[]; 
 /** A value of `type` (`element` for lists), or the type itself when `isType`, like `Vector2` in `Vector2.One`. */
 export type Resolved = { type: StrictType; element?: string; isType?: boolean };
 export type Entry = { owner: StrictType; name: string; method?: StrictMethod; member?: StrictMember };
+/** `loops` are the iterables of the `for` loops around a line (innermost last), the loops without `in` set `value`. */
+export type Local = { keyword: string; expression: string; loops: string[] };
 export type Scope = { types: StrictType[]; own: StrictType; method?: StrictMethod;
-	locals: Map<string, { expression: string; element: boolean }> };
+	locals: Map<string, Local>; loops: string[] };
 
 const memberLine = /^(has|constant|mutable) (\S+)(?: (.*))?$/;
 const explicitType = /^[A-Z][\w/]*(\([^)]*\))?/;
@@ -63,16 +65,19 @@ function declaredType(name: string, rest: string, own: string, members: StrictMe
 		name[0].toUpperCase() + name.slice(1));
 }
 
-function valueType(value: string, members: StrictMember[]): string {
+export function valueType(value: string, members: StrictMember[]): string {
 	return /^-?\d/.test(value) ? 'Number' : value.startsWith('"') ? 'Text' : value.startsWith('(') ? 'List' :
 		/^(true|false)$/.test(value) ? 'Boolean' : /^([A-Z]\w*)\(/.exec(value)?.[1] ??
 		members.find((member) => member.name === value)?.type ?? '';
 }
 
-function closingBracket(text: string): number {
+/** Index of the bracket closing the one text starts with, brackets in texts are skipped. */
+export function closingBracket(text: string): number {
 	let depth = 0;
+	let inText = false;
 	for (let index = 0; index < text.length; index++) {
-		depth += text[index] === '(' ? 1 : text[index] === ')' ? -1 : 0;
+		inText = text[index] === '"' ? !inText : inText;
+		depth += inText ? 0 : text[index] === '(' ? 1 : text[index] === ')' ? -1 : 0;
 		if (depth === 0) {
 			return index;
 		}
@@ -80,12 +85,14 @@ function closingBracket(text: string): number {
 	return text.length;
 }
 
-function splitArguments(text: string): string[] {
+export function splitArguments(text: string): string[] {
 	const parts = [''];
 	let depth = 0;
+	let inText = false;
 	for (const character of text) {
-		depth += character === '(' ? 1 : character === ')' ? -1 : 0;
-		if (character === ',' && depth === 0) {
+		inText = character === '"' ? !inText : inText;
+		depth += inText ? 0 : character === '(' ? 1 : character === ')' ? -1 : 0;
+		if (character === ',' && depth === 0 && !inText) {
 			parts.push('');
 		} else {
 			parts[parts.length - 1] += character;
@@ -110,17 +117,32 @@ export function typeNamed(typeText: string, types: StrictType[]): Resolved | und
 	return single && list ? { type: list, element: single.name } : undefined;
 }
 
-export function scopeAt(types: StrictType[], own: StrictType, lines: string[], line: number): Scope {
+/** The local line declares: `let name = expression`, also with constant or mutable (members too), or `for name in`. */
+export function localOf(line: string): { keyword: string; name: string; expression: string } | undefined {
+	const [, keyword, name, expression] = /^\t*(let|constant|mutable|for) (\w+) (?:=|in) (.+)$/.exec(line) ?? [];
+	return name ? { keyword, name, expression } : undefined;
+}
+
+/** Names known at line, its own declaration only withLine (hover and hints on it), not inside its initializer. */
+export function scopeAt(types: StrictType[], own: StrictType, lines: string[], line: number, withLine = false): Scope {
 	const method = own.methods.find((candidate) => candidate.line < line && line <= candidate.endLine);
-	const locals = new Map<string, { expression: string; element: boolean }>();
-	for (const text of method ? lines.slice(method.line + 1, line) : []) {
-		const local = /^\t+(?:let|constant|mutable) (\w+) = (.+)$/.exec(text);
-		const loop = /^\t+for (\w+) in (.+)$/.exec(text);
-		if (local ?? loop) {
-			locals.set((local ?? loop)![1], { expression: (local ?? loop)![2], element: !local });
+	const locals = new Map<string, Local>();
+	const loops: Array<{ indent: number; iterable: string }> = [];
+	const iterables = () => loops.map((loop) => loop.iterable);
+	(method ? lines.slice(method.line + 1, line + 1) : []).forEach((text, index, body) => {
+		const indent = /^\t*/.exec(text)![0].length;
+		const isLine = index === body.length - 1;
+		while (text && loops.length > 0 && loops[loops.length - 1].indent >= indent) {
+			loops.pop();
 		}
-	}
-	return { types, own, method, locals };
+		const local = localOf(text);
+		if (local && (withLine || !isLine)) {
+			locals.set(local.name, { keyword: local.keyword, expression: local.expression, loops: iterables() });
+		} else if (!local && !isLine && /^\t+for\b/.test(text)) {
+			loops.push({ indent, iterable: text.trim().slice(4) });
+		}
+	});
+	return { types, own, method, locals, loops: iterables() };
 }
 
 /** Type of an expression chain like `vector.Normalize.X`, `"hi".Length` or `numbers(0)`, undefined when unknown. */
@@ -154,23 +176,25 @@ function splitChain(chain: string): string[] {
 }
 
 function resolveFirst(segment: string, scope: Scope, depth: number): Resolved | undefined {
-	if (/^-?\d/.test(segment)) {
-		return typeNamed('Number', scope.types);
-	}
-	if (segment.startsWith('"') || segment.startsWith('(')) {
-		return typeNamed(segment.startsWith('"') ? 'Text' : 'List', scope.types);
+	if (/^(-?\d|"|\(|(true|false)$)/.test(segment)) {
+		return typeNamed(valueType(segment, []), scope.types);
 	}
 	const [, name, call] = /^(\w+)(\(.*\))?$/s.exec(segment) ?? [];
 	if (!name) {
 		return undefined;
 	}
+	if (name === 'value' && scope.loops.length > 0) {
+		const loops = scope.loops.slice(0, -1);
+		return indexed(iterated(resolve(scope.loops[loops.length] || 'value', { ...scope, loops }, depth + 1), scope.types), call,
+			scope.types);
+	}
 	const declared = name === 'value' ? scope.own.name : name === 'index' ? 'Number' :
 		scope.method?.parameters.find((parameter) => parameter.name === name)?.type ??
 		scope.own.members.find((member) => member.name === name)?.type;
 	const local = scope.locals.get(name);
-	const localType = local && resolve(local.expression, scope, depth + 1);
-	const value = declared !== undefined ? typeNamed(declared, scope.types) : local?.element ? indexed(localType, '()', scope.types)
-		: localType;
+	const localType = local && resolve(local.expression, { ...scope, loops: local.loops }, depth + 1);
+	const value = declared !== undefined ? typeNamed(declared, scope.types) : local?.keyword === 'for'
+		? iterated(localType, scope.types) : localType;
 	if (value) {
 		return indexed(value, call, scope.types);
 	}
@@ -186,9 +210,22 @@ function indexed(resolved: Resolved | undefined, call: string | undefined, types
 	return call && resolved ? resolved.element ? typeNamed(resolved.element, types) : undefined : resolved;
 }
 
+// ponytail: the value of a for loop is the element of a list or of the list a type has (Text has characters), X of its
+// `for Iterator(X)` (Range), else a type that has an iterator gives itself (`for 10`), Dictionary pairs and Enum values
+// stay unknown; upgrade: loop types from Strict's type inference
+function iterated(resolved: Resolved | undefined, types: StrictType[]): Resolved | undefined {
+	const list = resolved?.element ? resolved : resolved?.type.members.map((member) => typeNamed(member.type, types))
+		.find((member) => member?.element);
+	const iterator = /^Iterator\((\w+)\)$/.exec(resolved?.type.methods.find((method) => method.name === 'for')?.returns ?? '');
+	return list ? typeNamed(list.element!, types) : iterator ? typeNamed(iterator[1], types)
+		: resolved?.type.members.some((member) => member.type === 'Iterator') ? resolved : undefined;
+}
+
+/** A method returning its own type keeps the element of the receiver, `numbers.Reverse` stays a list of Number. */
 function returned(method: StrictMethod, receiver: Resolved, types: StrictType[]): Resolved | undefined {
-	return method.returns === 'Generic' ? receiver.element ? typeNamed(receiver.element, types) : undefined
+	const type = method.returns === 'Generic' ? receiver.element ? typeNamed(receiver.element, types) : undefined
 		: typeNamed(method.returns, types);
+	return type?.type === receiver.type && !type.element ? { type: receiver.type, element: receiver.element } : type;
 }
 
 /** Members and named methods usable after a dot: the type's own, then those of each type it has (`has number`). */
@@ -203,6 +240,13 @@ export function membersOf(resolved: Resolved, types: StrictType[]): Entry[] {
 function entries(type: StrictType): Entry[] {
 	return [...type.members.map((member) => ({ owner: type, name: member.name, member })),
 		...type.methods.filter((method) => isNamed(method.name)).map((method) => ({ owner: type, name: method.name, method }))];
+}
+
+// ponytail: like Strict's TypeShape.IsTrait no method has a body or is computed (`Area = Width * Height`), so native types
+// without Strict bodies (File) count as traits too; upgrade: the shapes of Strict
+export function isTrait(type: StrictType | undefined): boolean {
+	return type !== undefined && type.methods.length > 0 && type.methods.every((method) =>
+		method.tests.length + method.implementation.length === 0 && !/^[^\s(]+(\(.*\))? = /.test(method.header));
 }
 
 export function isNamed(name: string): boolean {
