@@ -74,6 +74,10 @@ suite('native compiler', () => {
 		assert.deepStrictEqual(run.output.split(/\r?\n/).filter(Boolean), ['first', 'second']);
 	});
 
+	test('runProcess writes input to the standard input of the process', async () =>
+		assert.strictEqual((await runProcess(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], os.tmpdir(),
+			{ input: 'has number\n' })).output, 'has number\n'));
+
 	test('runProcess stops the process when its signal aborts', async () => {
 		const abort = new AbortController();
 		setTimeout(() => abort.abort(), 50);

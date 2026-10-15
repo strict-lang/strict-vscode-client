@@ -1,12 +1,8 @@
-import * as fs from 'fs';
 import * as os from 'os';
-import * as path from 'path';
 import { crashText, runStrict, StrictRun, testDuration, testResults } from './nativeCompiler';
 import { strictPath } from './paths';
-import { isTest, typeNameFromPath } from './scrunchDiscover';
-import {
-	isNamed, isTrait, keywords, parseType, resolve, Resolved, Scope, StrictMethod, StrictType, typeNamed
-} from './strictIndex';
+import { isTest } from './scrunchDiscover';
+import { isNamed, keywords, parseType, resolve, Resolved, Scope, StrictMethod, StrictType, typeNamed } from './strictIndex';
 
 export type ExistingCall = { owner: StrictType; method: StrictMethod; call?: string };
 export type SharedRun = { bodies: Promise<string[]>; waiting: Array<() => boolean> };
@@ -222,16 +218,13 @@ export function unfinishedTest(line: string): string | undefined {
 }
 
 /** Copy of source with `expression is <placeholder fitting resolved>` as the first test of method (`is ()` crashes Strict,
- * lists take `(0)`), for texts `expression is Error` next (Strict prints both alike after got:), unfinished tests and other
- * methods without implementation are left out: Strict can not run them. */
+ * lists take `(0)`), unfinished tests and other methods without implementation are left out: Strict can not run them. */
 export function withEvaluation(source: string, method: StrictMethod, expression: string, resolved?: Resolved):
-	{ text: string; test: string; errorTest?: string } {
+	{ text: string; test: string } {
 	const name = resolved?.type.name;
 	const test = `${grouped(expression)} is ${name === 'Text' ? '""' : name === 'Boolean' ? 'true' : name === 'List' ? '(0)' : '0'}`;
-	const errorTest = name === 'Text' ? `${grouped(expression)} is Error` : undefined;
-	const text = withImplementation(source, method, method.implementation.join('\n').slice(1),
-		[test, ...errorTest ? [errorTest] : [], ...method.tests]);
-	return { text: text.split('\n').filter((line) => unfinishedTest(line) === undefined).join('\n'), test, errorTest };
+	const text = withImplementation(source, method, method.implementation.join('\n').slice(1), [test, ...method.tests]);
+	return { text: text.split('\n').filter((line) => unfinishedTest(line) === undefined).join('\n'), test };
 }
 
 /** expression in brackets when its outermost operator is and, or, xor or then: they bind weaker than is, a bracketed value
@@ -258,24 +251,12 @@ function outermost(expression: string): string {
 	return blanked === expression ? expression : outermost(blanked);
 }
 
-// ponytail: quotes texts by the type evaluatedType finds, an untyped `name + "s"` stays unquoted and texts with ", " in a
-// list split; upgrade: Strict prints values as code
 /** Value of the left side of the evaluation test as Strict code from `strict test` of its text: printed after `got:` when it
- * failed (`Error: X` as `Error("X")` unless the text failed its errorTest), the placeholder when it passed, else the first
- * error Strict reports, located by file name only. */
-export function evaluated(evaluation: { text: string; test: string; errorTest?: string }, run: StrictRun, resolved?: Resolved):
-	Evaluation {
-	const results = testResults(evaluation.text, '', run);
-	const result = results.find((candidate) => candidate.expression === evaluation.test);
-	const isText = results.find((candidate) => candidate.expression === evaluation.errorTest)?.state === 0;
-	const quoted = (value: string) => `"${value.replace(/[\\"]/g, '\\$&')}"`;
-	const failure = isText ? undefined : /^Error: (.+)$/.exec(result?.actual ?? '')?.[1];
-	if (failure !== undefined) {
-		return { value: `Error(${quoted(failure)})` };
-	}
+ * failed, the placeholder when it passed, else the first error Strict reports, located by file name only. */
+export function evaluated(evaluation: { text: string; test: string }, run: StrictRun): Evaluation {
+	const result = testResults(evaluation.text, '', run).find((candidate) => candidate.expression === evaluation.test);
 	if (result?.actual !== undefined) {
-		return { value: resolved?.type.name === 'Text' ? quoted(result.actual) : resolved?.element === 'Text' &&
-			/^\(.+\)$/.test(result.actual) ? `(${result.actual.slice(1, -1).split(', ').map(quoted).join(', ')})` : result.actual };
+		return { value: result.actual };
 	}
 	const passed = result && run.output.split(/\r?\n/).some((line) => line.startsWith('Test passed: ') &&
 		line.replace(testDuration, '').endsWith(`:line ${result.lineNumber + 1}`));
@@ -284,32 +265,12 @@ export function evaluated(evaluation: { text: string; test: string; errorTest?: 
 		: { error: error.split('\n')[0].replace(/ in \S*?([^\\/\s]+\.strict):\d+$/, ' in $1') };
 }
 
-/** Value of expression in the context of method, evaluated as its first test on a temporary copy of file with source, run in
- * project, the project folder of file. */
+/** Value of expression in the context of method, evaluated as its first test of file with source, run in project, the project
+ * folder of file. */
 export async function evaluate(root: string, project: string, file: string, source: string, method: StrictMethod,
 	expression: string, resolved?: Resolved): Promise<Evaluation> {
 	const evaluation = withEvaluation(source, method, expression, resolved);
-	return evaluated(evaluation, await withTemporaryCopy(file, [evaluation.text], (copy) =>
-		testCopy(root, project, copy, evaluation.text)), resolved);
-}
-
-// ponytail: finds types by their names (`has board`, `Cells`), may take a few unused ones along; upgrade: dependencies from Strict
-/** Files of the types in the folder of file that source uses directly or through them, `strict` parses every file it copies. */
-export function usedSiblings(file: string, source: string): string[] {
-	const folder = path.dirname(file);
-	const siblings = fs.readdirSync(folder).filter((name) => name.endsWith('.strict') && name !== path.basename(file));
-	const used: string[] = [];
-	const texts = [source];
-	for (const text of texts) {
-		for (const sibling of siblings.filter((name) => !used.includes(name))) {
-			const name = typeNameFromPath(sibling);
-			if (new RegExp(`\\b[${name[0]}${name[0].toLowerCase()}]${name.slice(1)}s?\\b`).test(text)) {
-				used.push(sibling);
-				texts.push(fs.readFileSync(path.join(folder, sibling), 'utf8'));
-			}
-		}
-	}
-	return used;
+	return evaluated(evaluation, await testText(root, project, file, evaluation.text));
 }
 
 export function passedAll(output: string, methodName: string, testCount: number): boolean {
@@ -319,24 +280,22 @@ export function passedAll(output: string, methodName: string, testCount: number)
 	return results.length === testCount && results.every((result) => result![1] === 'passed');
 }
 
-// ponytail: one strict process per body in a temporary copy (40 ms each for small types); upgrade: verify all bodies in one
-// strict process
+// ponytail: one strict process per body (40 ms each for small types); upgrade: verify all bodies in one strict process
 /** Bodies for method that pass all its tests on the Strict VM, in the order given, run in project like evaluate. */
 export async function passingBodies(root: string, project: string, file: string, source: string, method: StrictMethod,
 	bodies: string[], isCancelled = () => false): Promise<string[]> {
 	const tests = pendingTests(method) ?? method.tests;
 	const passed = new Set<string>();
 	let next = 0;
-	await Promise.all(Array.from({ length: Math.min(parallelRuns, bodies.length) }, () =>
-		withTemporaryCopy(file, [source, ...bodies], async (copy) => {
-			while (next < bodies.length && !isCancelled()) {
-				const body = bodies[next++];
-				if (passedAll((await testCopy(root, project, copy, withImplementation(source, method, body, tests))).output,
-					method.name, tests.length)) {
-					passed.add(body);
-				}
+	await Promise.all(Array.from({ length: Math.min(parallelRuns, bodies.length) }, async () => {
+		while (next < bodies.length && !isCancelled()) {
+			const body = bodies[next++];
+			if (passedAll((await testText(root, project, file, withImplementation(source, method, body, tests))).output,
+				method.name, tests.length)) {
+				passed.add(body);
 			}
-		})));
+		}
+	}));
 	return bodies.filter((body) => passed.has(body));
 }
 
@@ -358,30 +317,7 @@ export function sharedRun(runs: Map<string, SharedRun>, key: string, isCancelled
 	return run.bodies;
 }
 
-// ponytail: a copy outside the project, Strict finds the other types from the project folder it runs in; upgrade: Strict tests a text
-/** Calls use with the path for a copy of file in a new temporary folder, next to copies of the sibling types any of texts uses
- * (they win over namesakes elsewhere like for file), no native traits (their code is next to them) or base types (the copies
- * would replace them), the folder is removed afterwards. */
-export async function withTemporaryCopy<T>(file: string, texts: string[], use: (copy: string) => Promise<T>): Promise<T> {
-	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-'));
-	const source = path.dirname(file);
-	try {
-		const native = fs.existsSync(path.join(source, 'native'));
-		for (const sibling of fs.existsSync(path.join(source, 'Any.strict')) ? [] : usedSiblings(file, texts.join('\n'))) {
-			const text = fs.readFileSync(path.join(source, sibling), 'utf8');
-			if (!native || !isTrait(parseType(sibling, text))) {
-				fs.writeFileSync(path.join(folder, sibling), text);
-			}
-		}
-		return await use(path.join(folder, path.basename(file)));
-	} finally {
-		fs.rmSync(folder, { recursive: true, force: true });
-	}
-}
-
-/** `strict test` of text written to copy, run in project with copy relative to it like NativeTester. */
-export function testCopy(root: string, project: string, copy: string, text: string): Promise<StrictRun> {
-	fs.writeFileSync(copy, text);
-	fs.rmSync(copy.replace(/\.strict$/, '.strictbinary'), { force: true });
-	return runStrict(root, ['test', strictPath(project, copy)], { cwd: project });
+/** `strict test` of text as file, read from standard input (file and its cache stay as they are), run in project. */
+export function testText(root: string, project: string, file: string, text: string): Promise<StrictRun> {
+	return runStrict(root, ['test', strictPath(project, file), '-'], { cwd: project, input: text });
 }

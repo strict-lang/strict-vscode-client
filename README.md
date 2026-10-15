@@ -18,8 +18,8 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
 - **Implementation from tests** — write a method header and its tests, press Enter after the last test: the empty line
   shows an implementation as ghost text (`Tab` accepts, `Alt+]` shows the next). Calls of existing methods with the same
   name or the same test values come first, then calls on parameters and members returning the right type and
-  operators between them. Every suggestion passed all tests of the method on the Strict VM (`strict test` on a
-  temporary copy, about 40 ms each).
+  operators between them. Every suggestion passed all tests of the method on the Strict VM (`strict test <file> -`
+  with the code on standard input, the file stays as it is, about 40 ms each).
 - **No reinvented wheels** — a method that an existing method already does is an error (`MethodAlreadyExists`):
   `strict check` reports a body copied from another method, the extension a call of an existing method (its copy with
   other names, the same name or the same test values) that passes all its tests, e.g. writing `Clamped` on a type with
@@ -92,7 +92,7 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
 - **Ruler** at 120 characters, the line limit of Strict.
 - **Strict: Evaluate** (`Shift+Enter` on a selection) shows the value of the selected expression after its line
   (`= 212`, also in its hover) until the selection changes, or the error Strict reports. The expression runs as the first
-  test of its method on a temporary copy of the file.
+  test of its method, the edited code goes to `strict test <file> -` on standard input.
 - **Fill expected value** — the quick fix on a test ending in `is` or `is ?` evaluates its left side the same way and
   completes the test with the value, e.g. `Celsius(100).Fahrenheit is` becomes `Celsius(100).Fahrenheit is 212`, an
   error value becomes `Error("InvalidSoundHandle")`.
@@ -197,11 +197,11 @@ code), `<root>` is the base types folder Strict would pick itself (`.` in the St
 | Coverage of a file | `strict test <file> <root> lines` |
 | Validators of a folder | `strict check <folder>` |
 | Run a program | `strict <file>`, `strict <file> <root> <arguments>` |
-| Verify a suggested or existing implementation | `strict test <temporary copy of the file>` |
+| Verify a suggested or existing implementation | `strict test <file> -` (code on standard input) |
 | Build a native executable (tests first) | `strict build <file>` |
 | Refresh the copied packages of a folder (run in that folder, Strict copies into it) | `strict update .` |
 | Version in the language status and folder picker | `strict version` |
-| Evaluate an expression, fill an expected value | `strict test <temporary copy with "<expression> is 0" as first test>` |
+| Evaluate an expression, fill an expected value | `strict test <file> -` (code with `<expression> is 0` as first test) |
 
 Agents can use the same commands to verify `.strict` changes without VS Code, e.g. in `DeltaEngine`:
 `../Strict/strict test Fonts/TextWrapper.strict`.
@@ -225,12 +225,7 @@ Agents can use the same commands to verify `.strict` changes without VS Code, e.
   and of base types point to a missing file there; terminal links of task output work in any folder. In a window
   without folders tasks run in a terminal that takes no input except Ctrl+C and links no files.
 - **Evaluate** runs the selection as a test of its method: members and parameters have their default values (`0`, `""`),
-  locals of the implementation are unknown (`NameNotFound`). Texts are quoted by the type the extension finds, an
-  expression like `name + "s"` shows its text without quotes, a text over several lines only its first line (an Error
-  turned into text has its stack in it). The temporary copy takes the types of its folder it uses
-  along, not native traits or base types: Strict finds those in the project, except two folders deep in the Strict
-  repository (`Examples/NativeAdd`). With the project on another drive than the temporary folder copied types get wrong
-  values (Strict names types of absolute paths `Strict/<Name>`).
+  locals of the implementation are unknown (`NameNotFound`). Values are shown as Strict prints them after `got:`.
 - Inlay hints, semantic highlighting and completion by type use the same index: operators (`a + b`) are not followed, such
   variables get no type hint, names that do not resolve keep the colors of the grammar.
 - Quick fixes change one file: other files keep the old uses of a removed parameter or a renamed list member. The fix

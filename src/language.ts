@@ -60,7 +60,7 @@ export class StrictLanguage implements vscode.Disposable {
 			...registerNavigation(this),
 			...registerInsight((document) => this.types(document), this.root),
 			registerTypeFixes((document) => this.types(document)),
-			...registerRefactorings(root, (document, line) => this.scope(document, line))
+			...registerRefactorings(root, project, (document, line) => this.scope(document, line))
 		];
 		vscode.workspace.textDocuments.forEach((document) => this.scheduleCheck(document));
 	}

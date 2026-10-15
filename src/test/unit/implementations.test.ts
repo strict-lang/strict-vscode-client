@@ -1,10 +1,7 @@
 import * as assert from 'assert';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
 import {
 	copiedFrom, evaluated, evaluatedType, existingCalls, implementationCandidates, passedAll, pendingTests, sharedRun, SharedRun,
-	unfinishedTest, usedSiblings, withEvaluation, withImplementation, withTemporaryCopy
+	unfinishedTest, withEvaluation, withImplementation
 } from '../../implementations';
 import { parseType, Resolved } from '../../strictIndex';
 import { number, text, list, vector } from './strictIndex.test';
@@ -25,18 +22,6 @@ const temperature = [
 const own = parseType('C:/Code/Temperature.strict', temperature);
 const types = [own, number, text, list, vector];
 
-async function inBoardFolder(use: (folder: string) => unknown): Promise<void> {
-	const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-siblings-'));
-	try {
-		fs.writeFileSync(path.join(folder, 'Board.strict'), 'has cells List(Cell)');
-		fs.writeFileSync(path.join(folder, 'Cell.strict'), 'has color Color');
-		fs.writeFileSync(path.join(folder, 'Color.strict'), 'has red Number');
-		fs.writeFileSync(path.join(folder, 'Broken.strict'), 'has (');
-		await use(folder);
-	} finally {
-		fs.rmSync(folder, { recursive: true, force: true });
-	}
-}
 
 suite('implementations', () => {
 	test('copiedFrom finds an existing method with the same body up to names and calls it with the same values', () => {
@@ -117,25 +102,6 @@ suite('implementations', () => {
 			'\tcelsius * 2']);
 	});
 
-	test('usedSiblings are the types of the folder the source uses, also through other types, broken unused ones stay out', () =>
-		inBoardFolder((folder) => assert.deepStrictEqual(usedSiblings(path.join(folder, 'Game.strict'), 'has board\nhas cells Cells'),
-			['Board.strict', 'Cell.strict', 'Color.strict'])));
-
-	test('withTemporaryCopy copies the sibling types any of the texts uses next to the copy, no native traits or base types', () =>
-		inBoardFolder(async (folder) => {
-			const copied = () => withTemporaryCopy(path.join(folder, 'Game.strict'), ['has number', '\tBoard(number)'],
-				async (copy) => ({ copy, files: fs.readdirSync(path.dirname(copy)).sort() }));
-			const { copy, files } = await copied();
-			assert.deepStrictEqual(files, ['Board.strict', 'Cell.strict', 'Color.strict']);
-			assert.ok(path.basename(copy) === 'Game.strict' && !fs.existsSync(path.dirname(copy)), copy);
-			fs.mkdirSync(path.join(folder, 'native'));
-			fs.writeFileSync(path.join(folder, 'Color.strict'), 'has red Number\nBrightness Number');
-			fs.writeFileSync(path.join(folder, 'Board.strict'), 'has cells List(Cell)\nCount = cells.Length');
-			assert.deepStrictEqual((await copied()).files, ['Board.strict', 'Cell.strict']);
-			fs.writeFileSync(path.join(folder, 'Any.strict'), '');
-			assert.deepStrictEqual((await copied()).files, []);
-		}));
-
 	test('sharedRun runs once for all callers until every one of them is cancelled, a cancelled run is not kept', async () => {
 		const runs = new Map<string, SharedRun>();
 		let starts = 0;
@@ -165,7 +131,7 @@ suite('implementations', () => {
 		const evaluation = withEvaluation(unfinished, doubled, '"hi" + "there"', { type: text });
 		assert.deepStrictEqual(evaluation.text.split('\n'), ['has celsius Number', 'Limited(low Number, high Number) Number',
 			'\tTemperature(30).Limited(0, 20) is 20', '\tcelsius > high then high else celsius < low then low else celsius',
-			'Doubled Number', '\t"hi" + "there" is ""', '\t"hi" + "there" is Error', '\tTemperature(2).Doubled is 4',
+			'Doubled Number', '\t"hi" + "there" is ""', '\tTemperature(2).Doubled is 4',
 			'\tcelsius * 2']);
 		assert.deepStrictEqual([undefined, { type: number }, { type: list, element: 'Number' },
 			{ type: parseType('C:/Strict/Boolean.strict', '') }].map((resolved) =>
@@ -179,23 +145,15 @@ suite('implementations', () => {
 	test('evaluated is the value after got: as Strict code, the placeholder when the test passed, else the error of Strict', () => {
 		const at = 'in Doubled at ../Temp/strict-1/Temperature.strict:line 6';
 		const evaluation = (expression: string, output: string, resolved?: Resolved, exitCode = 1) => evaluated(
-			withEvaluation(temperature, own.methods[2], expression, resolved), { exitCode, durationMs: 1, output }, resolved);
+			withEvaluation(temperature, own.methods[2], expression, resolved), { exitCode, durationMs: 1, output });
 		assert.deepStrictEqual(evaluation('celsius * 3', `Test failed: celsius * 3 is 0 ${at}\n  got: 9\n1 tests failed in x`),
 			{ value: '9' });
 		assert.deepStrictEqual(evaluation('celsius * 3', `Test passed: celsius * 3 is 0 ${at} (0.01 ms)\nAll tests passed in x`,
 			undefined, 0), { value: '0' });
-		assert.deepStrictEqual(evaluation('"a b".Split(" ")', `Test failed: "a b".Split(" ") is (0) ${at}\n  got: (a, b)`,
+		assert.deepStrictEqual(evaluation('"a b".Split(" ")', `Test failed: "a b".Split(" ") is (0) ${at}\n  got: ("a", "b")`,
 			{ type: list, element: 'Text' }), { value: '("a", "b")' });
-		assert.deepStrictEqual(evaluation('celsius / 0', `Test failed: celsius / 0 is 0 ${at}\n  got: Error: DivisionByZero`),
-			{ value: 'Error("DivisionByZero")' });
-		assert.deepStrictEqual(evaluation('celsius', `Test failed: celsius is 0 ${at}\n  got: Error: ConstraintNotMet: "0" > 0`),
-			{ value: 'Error("ConstraintNotMet: \\"0\\" > 0")' });
-		const named = (errorTest: string) => evaluation('"Error: " + name', `Test failed: "Error: " + name is "" ${at}\n` +
-			`  got: Error: Boom\nTest ${errorTest}: "Error: " + name is Error ${at.replace('line 6', 'line 7')}\n  got: Error: Boom`,
-			{ type: text });
-		assert.deepStrictEqual([named('failed'), named('passed')], [{ value: '"Error: Boom"' }, { value: 'Error("Boom")' }]);
-		assert.deepStrictEqual(evaluation('name', `Test failed: name is "" ${at}\n  got: say "hi" \\ now`, { type: text }),
-			{ value: '"say \\"hi\\" \\\\ now"' });
+		assert.deepStrictEqual(evaluation('Error("Zero")', `Test failed: Error("Zero") is 0 ${at}\n  got: Error("Zero")\n` +
+			'\tat Temperature.$Tests in Temp/Temperature.strict:line 6'), { value: 'Error("Zero")' });
 		assert.deepStrictEqual(evaluation('scaled', 'NameNotFound: scaled used in ./../Temp/strict-1/Temperature.strict:6'),
 			{ error: 'NameNotFound: scaled used in Temperature.strict' });
 		assert.deepStrictEqual(evaluation('celsius / 0', `Test failed: celsius / 0 is 0 ${at}`, undefined, 3221225477),

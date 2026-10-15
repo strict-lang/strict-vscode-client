@@ -1,19 +1,17 @@
-import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { formatted, printed } from './formatting';
-import { withTemporaryCopy } from './implementations';
 import { textOf } from './navigation';
 import { runStrict } from './nativeCompiler';
-import { strictDocumentSelector } from './paths';
+import { strictDocumentSelector, strictPath } from './paths';
 import { creations, extractToLet, inlineLet, Refactoring } from './refactorings';
 import { Scope } from './strictIndex';
 
 /** Formatter, extract and inline refactorings and the quick fixes creating missing methods and types of .strict files. */
-export function registerRefactorings(root: () => string | undefined,
+export function registerRefactorings(root: () => string | undefined, project: (file: string) => string,
 	scopeAt: (document: vscode.TextDocument, line: number) => Scope): vscode.Disposable[] {
 	return [
 		vscode.languages.registerDocumentFormattingEditProvider(strictDocumentSelector,
-			{ provideDocumentFormattingEdits: async (document) => formatEdits(document, await canonical(root(), document)) }),
+			{ provideDocumentFormattingEdits: async (document) => formatEdits(document, await canonical(root(), project, document)) }),
 		vscode.languages.registerDocumentRangeFormattingEditProvider(strictDocumentSelector,
 			{ provideDocumentRangeFormattingEdits: (document, range) =>
 				formatEdits(document, formatted(document.getText(), range.start.line, range.end.line)) }),
@@ -37,12 +35,12 @@ export function registerRefactorings(root: () => string | undefined,
 
 /** The whole document with tabs and as `strict format` prints it, only with tabs when Strict is missing, can't parse it or
  * changed more than whitespace and brackets. */
-async function canonical(root: string | undefined, document: vscode.TextDocument): Promise<string> {
+async function canonical(root: string | undefined, project: (file: string) => string, document: vscode.TextDocument):
+	Promise<string> {
 	const text = formatted(document.getText());
-	const run = root && document.uri.scheme === 'file' && await withTemporaryCopy(document.fileName, [], (copy) => {
-		fs.writeFileSync(copy, text);
-		return runStrict(root, ['format', copy]);
-	}).catch(() => undefined);
+	const folder = project(document.fileName);
+	const run = root && document.uri.scheme === 'file' &&
+		await runStrict(root, ['format', strictPath(folder, document.fileName), '-'], { cwd: folder, input: text });
 	return (run && run.exitCode === 0 && printed(run.output, text)) || text;
 }
 

@@ -6,7 +6,7 @@ import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
 import { TestRunnerNotification } from './testResults';
 
 export type StrictRun = { exitCode: number; output: string; durationMs: number };
-export type RunOptions = { signal?: AbortSignal; timeoutMs?: number; cwd?: string };
+export type RunOptions = { signal?: AbortSignal; timeoutMs?: number; cwd?: string; input?: string };
 export type CheckIssue = { file: string; line: number; rule: string; target: string };
 export type LineCount = { file: string; line: number; executions: number; ms: number; selfMs: number };
 
@@ -47,7 +47,8 @@ async function listIgnored(folder: string): Promise<Set<string>> {
 		normalizeFsPath(path.resolve(folder, entry))));
 }
 
-/** Runs file in cwd, killed with the processes it started when signal aborts or after the timeout. */
+/** Runs file in cwd with options.input as its standard input, killed with the processes it started when signal aborts or
+ * after the timeout. */
 export function runProcess(file: string, args: string[], cwd: string, options: RunOptions = {}): Promise<StrictRun> {
 	const started = performance.now();
 	return new Promise((resolve) => {
@@ -69,6 +70,9 @@ export function runProcess(file: string, args: string[], cwd: string, options: R
 		child.stdout?.setEncoding('utf8').on('data', (text: string) => stdout += text);
 		child.stderr?.setEncoding('utf8').on('data', (text: string) => stderr += text);
 		child.on('error', (error) => failure = error.message);
+		if (options.input !== undefined) {
+			child.stdin?.end(options.input);
+		}
 		child.on('close', (code) => {
 			clearTimeout(timer);
 			options.signal?.removeEventListener('abort', aborted);
