@@ -12,9 +12,10 @@ export type Fix = { title: string; edits: Edit[]; rename?: [number, number] };
 export type Issue = { rule: string; line: number; target: string };
 
 const titles = new Map([['ExtraWhitespacesFoundAtBeginningOfLine', 'Indent with tabs'], ['UseConstantHere', 'Use constant'],
-	['VariableDeclaredAsMutableButValueNeverChanged', 'Use let, it never changes']]);
+	['VariableDeclaredAsMutableButValueNeverChanged', 'Use let, it never changes'], ['IsTrueIsNotNeeded', 'Remove is true']]);
 const renamedRules = new Set(['ParameterHidesMemberUseDifferentName', 'VariableHidesMemberUseDifferentName']);
 const safeMutable = 'VariableDeclaredAsMutableButValueNeverChanged';
+const isTrueRule = 'IsTrueIsNotNeeded';
 /** `TypeNotFound: Name used in File.strict:3` and the same for NameNotFound and MethodNotFound. */
 export const notFoundPattern = /^(TypeNotFound|NameNotFound|MethodNotFound): (\S+) used in (.+?\.strict):(\d+)/gm;
 
@@ -57,6 +58,7 @@ export function ruleFix(rule: string, lines: string[], line: number, target: str
 export function safeFixes(lines: string[], issues: Issue[]): Edit[] {
 	const fixed = new Map<number, string>();
 	for (const issue of issues.filter((candidate) => candidate.line < lines.length && (candidate.rule === safeMutable ||
+		candidate.rule === isTrueRule ||
 		candidate.rule === 'UseConstantHere' && /^\s+let /.test(lines[candidate.line])))) {
 		const text = fixedLine(issue.rule, fixed.get(issue.line) ?? lines[issue.line], issue.target);
 		if (text !== undefined) {
@@ -72,7 +74,9 @@ function fixedLine(rule: string, text: string, target: string, unit = 4): string
 		: rule === 'UseConstantHere' ? text.replace(/^(\s*)(?:let|has) (\w+)\b/, (all, indent, name) =>
 			name === target ? `${indent}constant ${name}` : all)
 		: rule === safeMutable ? text.replace(/^(\s*)mutable (\w+)\b/, (all, indent, name) =>
-			name === target ? `${indent}let ${name}` : all) : text;
+			name === target ? `${indent}let ${name}` : all)
+		: rule === isTrueRule ? text.replace(/^(\s*)(.+) is true$/, (all, indent, code) =>
+			target === code || target.startsWith(`${code}, `) ? indent + code : all) : text;
 	return fixed === text ? undefined : fixed;
 }
 

@@ -20,6 +20,15 @@ suite('fixes', () => {
 		assert.strictEqual(fixed('EmptyLineIsNotAllowed', 4, ''), undefined);
 	});
 
+	test('IsTrueIsNotNeeded drops is true of the named test line, also in safeFixes', () => {
+		const lines = ['has over Boolean', 'Locked Boolean', '\tStarted.Locked.over is true', '\tLocked is true', '\tover'];
+		const issue = { rule: 'IsTrueIsNotNeeded', line: 2, target: 'Started.Locked.over, a passed test line is true already' };
+		assert.deepStrictEqual([ruleFix(issue.rule, lines, issue.line, issue.target)?.title, ...edited(ruleFix(issue.rule, lines,
+			issue.line, issue.target))!], ['Remove is true', [2, 0, 2, 28, '\tStarted.Locked.over']]);
+		assert.strictEqual(ruleFix(issue.rule, lines, 3, issue.target), undefined);
+		assert.deepStrictEqual(safeFixes(lines, [issue]).map((edit) => edit.text), ['\tStarted.Locked.over']);
+	});
+
 	test('safeFixes only make a let a constant and a never changed mutable a let, members and indentation stay', () => {
 		assert.deepStrictEqual(safeFixes(rules, [
 			{ rule: 'VariableDeclaredAsMutableButValueNeverChanged', line: 4, target: 'count' },

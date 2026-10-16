@@ -75,10 +75,10 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
   (`UseConstantHere`), a never changed `mutable` becomes `let`, spaces become tabs, unused variables and members are
   removed, an unused parameter too when no call passes a value for it, `listNumbers List(Number)` becomes `numbers`
   everywhere it is used, names hiding a member or using a keyword start a rename, `MethodAlreadyExists` calls the existing
-  method instead. `TypeNotFound`, `NameNotFound` and `MethodNotFound` offer **Change to** the 3 closest types, names in
+  method instead, a test line ending in `is true` drops it (`IsTrueIsNotNeeded`). `TypeNotFound`, `NameNotFound` and `MethodNotFound` offer **Change to** the 3 closest types, names in
   scope or methods of the value's type.
 - **Fix All** (`source.fixAll.strict`) applies the fixes that never change what code does (`let` becomes `constant`, a never
-  changed `mutable` becomes `let`) to the whole file at once, e.g.
+  changed `mutable` becomes `let`, `is true` of a test line goes) to the whole file at once, e.g.
   on every save: `"[strict]": { "editor.codeActionsOnSave": { "source.fixAll.strict": "explicit" } }`.
 - **Strict: Run File** (`Ctrl+Shift+R`, play button in the editor title) runs the file's `Run` method in a terminal.
   **Strict: Run File with Arguments...** passes arguments to `Run(numbers)` style methods.

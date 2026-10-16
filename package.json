@@ -2,7 +2,7 @@
   "name": "strict-language",
   "displayName": "Strict Language",
   "description": "Language support for Strict: completion, hover, go to definition, implementations suggested from your tests, errors for methods that already exist, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler. See https://strict-lang.org/",
-  "version": "1.0.20261014",
+  "version": "1.0.20261017",
   "publisher": "strict-lang",
   "repository": {
     "type": "git",
