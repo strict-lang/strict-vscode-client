@@ -358,7 +358,7 @@ suite('scrunch coverage', () => {
 		assert.ok(implHover.includes('<1us') || implHover.includes('us'));
 	});
 
-	test('failed is-check paints the test line red, not the implementation', () => {
+	test('failed is-check paints the test line and the implementation it ran red', () => {
 		const methods = discoverStrictTests([
 			'Greet Text',
 			'\tTextHelper("World").Greet is "Hello, World!"',
@@ -376,20 +376,23 @@ suite('scrunch coverage', () => {
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 0)?.failed, true);
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1)?.failed, true);
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1)?.kind, 'test');
-		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.failed, false);
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.failed, true);
 		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.kind, 'coverage');
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 2)?.crashed, undefined);
 		assert.strictEqual(formatInlineFailure(marks.find((mark) => mark.lineNumber === 1)!),
 			'expected "Hello, World!"  got "Hello"');
 	});
 
-	test('a crash paints the lines of its stack red and leaves the rest of the method unpainted', () => {
+	test('a crash paints the lines up to it red, crosses the crashing line and leaves the rest unpainted', () => {
 		const methods = discoverStrictTests(['has number', 'Value Number', '\tCrashing(3).Value is 4', '\tlet list = (1, 2)',
 			'\tlet bad = list(number)', '\tlet result = bad + 1', '\tresult'].join('\n'));
 		const marks = (failure: Partial<TestRunnerNotification>) => lineCoverageMarks(methods, new Map([[2, { lineNumber: 2,
 			state: 0, expression: 'Crashing(3).Value is 4', methodName: 'Value', typeName: 'Crashing', ...failure }]]), new Set());
-		assert.deepStrictEqual(marks({ actual: 'Error: Value', stackTrace: 'at Crashing.Value in Crashing.strict:line 5\n' +
-			'at Crashing.Value in Crashing.strict:line 6\nat Crashing.$Tests in Crashing.strict:line 3' }).map((mark) =>
-			[mark.lineNumber, mark.failed]), [[1, true], [2, true], [3, false], [4, true], [5, true]]);
+		const crashed = marks({ actual: 'Error: Value', stackTrace: 'at Crashing.Value in Crashing.strict:line 5\n' +
+			'at Crashing.Value in Crashing.strict:line 6\nat Crashing.$Tests in Crashing.strict:line 3' });
+		assert.deepStrictEqual(crashed.map((mark) => [mark.lineNumber, mark.failed, mark.crashed]),
+			[[1, true, undefined], [2, true, undefined], [3, true, undefined], [4, true, true], [5, true, undefined]]);
+		assert.strictEqual(formatInlineFailure(crashed[3]), 'Error: Value');
 		const beforeRunning = marks({ message: 'NameNotFound: LoadedUnitData used in ./WebWars/Scene.strict:8' });
 		assert.deepStrictEqual(beforeRunning.map((mark) => [mark.lineNumber, mark.failed]), [[1, true], [2, true]]);
 		assert.strictEqual(formatCoverageHover(beforeRunning[1]), 'NameNotFound: LoadedUnitData used in ./WebWars/Scene.strict:8');

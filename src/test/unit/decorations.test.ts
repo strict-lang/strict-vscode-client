@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import {
-	formatCoverageHover, formatInlineFailure, formatInlineSlow, LineCoverageMark, remember, slowestTests, TimingHistory
+	formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, LineCoverageMark, remember, slowestTests, TimingHistory
 } from '../../scrunchModel';
 
 suite('decorations', () => {
@@ -39,6 +39,29 @@ suite('decorations', () => {
 		assert.strictEqual(formatInlineSlow(mark(3, 'coverage', 238), 10), undefined);
 		assert.strictEqual(formatInlineSlow(mark(2, 'coverage', 9.9), 10), undefined);
 		assert.strictEqual(formatInlineSlow(mark(2, 'coverage', 238, true), 10), undefined);
+	});
+
+	test('inline value is how often a line ran unless once outside loops and ifs, with a value the code does not show, no true result', () => {
+		const value = (hits: number, line: string, name?: string, assigned?: string) =>
+			formatInlineValue({ file: 'A.strict', line: 3, hits, name, value: assigned }, line);
+		assert.deepStrictEqual([value(6, '\tmutable first = numbers.First', 'first', '1'),
+			value(6, '\tmutable first = 1', 'first', '1'), value(1, '\t\treturn "Fizz"'), value(1, '\tnumber to Text'),
+			value(1, '\tif number % 3 is 0'), value(1, '\tlet next = Next(2)', 'next', '3'), value(1, '\ta + b', '5 + 3', '8'),
+			value(1, '\tover or ready', 'false or true', 'true'), value(1, '\tlet ended = over', 'ended', 'true'), value(11, '\tfor 19')],
+			['6 times, first = 1', '6 times', '1 time', '', '1 time', 'next = 3', '5 + 3 = 8', '', 'ended = true', '11 times']);
+	});
+
+	test('inline values that differ between hits follow the count, cut after 100 characters', () => {
+		const value = (each: string) => formatInlineValue({ file: 'A.strict', line: 3, hits: 7, each },
+			'\tlet ended = packed.Fits(upcoming) is false');
+		assert.deepStrictEqual([value('false, true, true'), value('BlockGrid((0, 0, '.repeat(10))],
+			['7 times: false, true, true', `7 times: ${'BlockGrid((0, 0, '.repeat(10)}`.slice(0, 100) + '…']);
+	});
+
+	test('hover shows all values of a line, also those cut after it', () => {
+		const each = 'BlockGrid((0, 0, '.repeat(10);
+		assert.strictEqual(formatCoverageHover({ lineNumber: 3, failed: false, kind: 'coverage', tests: [],
+			value: { file: 'A.strict', line: 3, hits: 7, each } }), `Ran 7 times: ${each}`);
 	});
 
 	test('slow marker tells the time before a slowdown', () => {

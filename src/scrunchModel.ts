@@ -1,4 +1,4 @@
-import { LineCount } from './nativeCompiler';
+import { LineCount, LineValue } from './nativeCompiler';
 import { DiscoveredMethod, DiscoveredTest } from './scrunchDiscover';
 import { formatDuration, parseDiscrepancy, parseStackFrames, TestRunnerNotification } from './testResults';
 
@@ -15,6 +15,10 @@ export type LineCoverageMark = {
 	expected?: string;
 	actual?: string;
 	message?: string;
+	/** The line of the method a failed test crashed in, shown with a big X and its error. */
+	crashed?: boolean;
+	/** Hit count and assigned value of the line in the last values run. */
+	value?: LineValue;
 };
 
 export function methodsWithTests(methods: DiscoveredMethod[]): DiscoveredMethod[] {
@@ -122,10 +126,12 @@ export function lineCoverageMarks(
 		for (const line of method.implementation) {
 			const count = method.tests.length > 0 ? counts.get(line.lineNumber) : undefined;
 			const isError = errorLines.has(line.lineNumber) || crash.lines.has(line.lineNumber);
+			const error = crash.errors.get(line.lineNumber);
 			if (isError || (count ? count.executions !== 0 : line.lineNumber <= crash.reach)) {
-				paint(marks, line.lineNumber, 'coverage', covering, isError, count
-					? { durationMs: count.ms, count }
-					: { durationMs: totalDuration(covering), callCount: covering.length });
+				paint(marks, line.lineNumber, 'coverage', covering, isError || failed, {
+					...count ? { durationMs: count.ms, count } : { durationMs: totalDuration(covering), callCount: covering.length },
+					...error === undefined ? {} : { crashed: true, message: error }
+				});
 			}
 		}
 	}
@@ -143,7 +149,10 @@ export function formatCoverageHover(mark: LineCoverageMark): string {
 	if (duration) {
 		lines.push(duration);
 	}
-	if (mark.callCount && mark.callCount > 0 && mark.kind === 'coverage') {
+	if (mark.value) {
+		const { hits, name, value, each } = mark.value;
+		lines.push(`Ran ${times(hits)}${each ? `: ${each}` : value === undefined ? '' : `: ${name} = ${value}`}`);
+	} else if (mark.callCount && mark.callCount > 0 && mark.kind === 'coverage') {
 		lines.push(`Called: ${times(mark.callCount)} so far`);
 	}
 	if (mark.count) {
@@ -158,7 +167,11 @@ export function formatCoverageHover(mark: LineCoverageMark): string {
 	return lines.join('\n');
 }
 
-export function formatInlineFailure(mark: Pick<LineCoverageMark, 'expected' | 'actual'>): string | undefined {
+export function formatInlineFailure(mark: Pick<LineCoverageMark, 'expected' | 'actual' | 'crashed' | 'message'>):
+	string | undefined {
+	if (mark.crashed) {
+		return cut(mark.message?.split(/\r?\n/)[0] ?? 'failed');
+	}
 	if (!mark.expected || !mark.actual || mark.expected === mark.actual) {
 		return undefined;
 	}
@@ -173,6 +186,24 @@ export function formatInlineSlow(mark: LineCoverageMark, slowMs: number): string
 	const executed = mark.count ? ` (self ${formatDuration(mark.count.selfMs)}, ${times(mark.count.executions)})` : '';
 	return isTimed && !mark.failed && (mark.durationMs ?? 0) >= slowMs ? `slow: ${formatDuration(mark.durationMs)}${before}${executed}`
 		: undefined;
+}
+
+/** How often line ran (once only in a loop or if) with what Strict printed: what it calculated the same on every hit unless
+ * line already shows it (`mutable first = 1`), `5 + 3 = 8` (not when true), else its values per hit (`3 times: 1, 2, 1`). */
+export function formatInlineValue(value: LineValue, line: string): string {
+	if (value.each) {
+		return cut(`${times(value.hits)}: ${value.each}`);
+	}
+	const isBranch = /^(\t\t|\t(for|if|else)\b)/.test(line);
+	const isTrueExpression = value.value === 'true' && !/^[A-Za-z][\w.]*$/.test(value.name ?? '');
+	const shown = value.value === undefined || isTrueExpression || line.includes(`${value.name} = ${value.value}`) ? undefined
+		: `${value.name} = ${value.value}`;
+	return cut([value.hits !== 1 || isBranch ? times(value.hits) : undefined, shown].filter(Boolean).join(', '));
+}
+
+/** text up to 100 characters, the hover shows all of it. */
+function cut(text: string): string {
+	return text.length > 100 ? text.slice(0, 100) + '…' : text;
 }
 
 /** Last measured milliseconds by `file|test expression`. */
@@ -257,19 +288,24 @@ function coveringTests(
 	return [...results.values()].filter((result) => result.methodName === method.name);
 }
 
-/** Lines of method on the stacks of its failed tests, reach is the last line they got to: all when one returned a value,
- * none when Strict stopped before running them. */
-function crashOf(method: DiscoveredMethod, tests: TestRunnerNotification[]): { lines: Set<number>; reach: number } {
+/** Lines of method on the stacks of its failed tests, errors by the innermost line each crashed in, reach is the last line
+ * they got to: all when one returned a value, none when Strict stopped before running them. */
+function crashOf(method: DiscoveredMethod, tests: TestRunnerNotification[]):
+	{ lines: Set<number>; errors: Map<number, string>; reach: number } {
 	const own = new Set(method.implementation.map((line) => line.lineNumber));
 	const lines = new Set<number>();
+	const errors = new Map<number, string>();
 	let reach = -1;
 	for (const test of tests) {
 		const stack = parseStackFrames(test.stackTrace).filter((frame) => frame.label === `${test.typeName}.${method.name}` &&
 			own.has(frame.line - 1)).map((frame) => frame.line - 1);
 		stack.forEach((line) => lines.add(line));
+		if (stack.length > 0) {
+			errors.set(stack[0], test.actual ?? test.message ?? 'failed');
+		}
 		reach = Math.max(reach, stack.length > 0 ? Math.max(...stack) : test.state !== 0 || test.actual !== undefined ? Infinity : -1);
 	}
-	return { lines, reach };
+	return { lines, errors, reach };
 }
 
 function times(count: number): string {
@@ -319,6 +355,7 @@ function paint(
 	existing.expected = extra.expected ?? existing.expected;
 	existing.actual = extra.actual ?? existing.actual;
 	existing.message = extra.message ?? existing.message;
+	existing.crashed = extra.crashed ?? existing.crashed;
 	for (const test of tests) {
 		if (!existing.tests.some((item) => item.lineNumber === test.lineNumber &&
 			item.expression === test.expression)) {

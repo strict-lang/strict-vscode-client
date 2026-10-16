@@ -10,7 +10,7 @@ Fahrenheit Number
 	degrees * 1.8 + 32
 ```
 
-Every method starts with its tests, the last line is its implementation. Change `1.8` to `2` and save to see a test fail.
+Every method starts with its tests, the last line is its implementation. Change `1.8` to `2` to see a test fail, no need to save.
 
 ```
 strict test Celsius.strict

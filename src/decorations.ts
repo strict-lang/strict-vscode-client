@@ -11,9 +11,26 @@ import {
 	window,
 	workspace
 } from 'vscode';
-import { formatCoverageHover, formatInlineFailure, formatInlineSlow, LineCoverageMark } from './scrunchModel';
+import { formatDuration } from './testResults';
+import { formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, LineCoverageMark } from './scrunchModel';
 
 export const showResultCommand = 'strict-vscode-client.scrunch.showResult';
+/** Errors, end of line texts and Test Results wait this long after the last change of a Strict file, gutter icons do not. */
+export const typingPauseMs = 1000;
+let lastTyped = 0;
+const typingWaits = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** Runs action once nothing was typed for typingPauseMs, a later call with the same key replaces a waiting one. */
+export function afterTyping(key: string, action: () => void): void {
+	clearTimeout(typingWaits.get(key));
+	typingWaits.delete(key);
+	const wait = lastTyped + typingPauseMs - Date.now();
+	if (wait <= 0) {
+		action();
+	} else {
+		typingWaits.set(key, setTimeout(() => afterTyping(key, action), wait));
+	}
+}
 
 export class DecorationController {
 	private readonly passType: TextEditorDecorationType;
@@ -22,6 +39,8 @@ export class DecorationController {
 	private readonly testFailType: TextEditorDecorationType;
 	private readonly statusFailType: TextEditorDecorationType;
 	private readonly statusHoverType: TextEditorDecorationType;
+	private readonly crashType: TextEditorDecorationType;
+	private readonly textType: TextEditorDecorationType;
 	private readonly marksByUri = new Map<string, Map<number, LineCoverageMark>>();
 
 	constructor(extensionPath: string) {
@@ -46,6 +65,11 @@ export class DecorationController {
 			gutterIconSize: 'contain'
 		});
 		this.statusHoverType = window.createTextEditorDecorationType({});
+		this.crashType = window.createTextEditorDecorationType({
+			gutterIconPath: Uri.file(path.join(extensionPath, 'media', 'test-crash.svg')),
+			gutterIconSize: 'contain'
+		});
+		this.textType = window.createTextEditorDecorationType({});
 	}
 
 	public dispose(): void {
@@ -55,6 +79,8 @@ export class DecorationController {
 		this.testFailType.dispose();
 		this.statusFailType.dispose();
 		this.statusHoverType.dispose();
+		this.crashType.dispose();
+		this.textType.dispose();
 		this.marksByUri.clear();
 	}
 
@@ -100,17 +126,20 @@ export class DecorationController {
 		const testFailed: DecorationOptions[] = [];
 		const statusFailed: DecorationOptions[] = [];
 		const statusHover: DecorationOptions[] = [];
+		const crashed: DecorationOptions[] = [];
+		const texts: DecorationOptions[] = [];
 		if (byLine) {
 			for (const mark of byLine.values()) {
 				if (mark.lineNumber < 0 || mark.lineNumber >= editor.document.lineCount) {
 					continue;
 				}
 				const line = editor.document.lineAt(mark.lineNumber);
-				const item: DecorationOptions = {
-					range: new Range(mark.lineNumber, 0, mark.lineNumber, line.text.length),
-					hoverMessage: coverageHover(editor.document.uri, mark),
-					renderOptions: inlineText(mark)
-				};
+				const range = new Range(mark.lineNumber, 0, mark.lineNumber, line.text.length);
+				const item: DecorationOptions = { range, hoverMessage: coverageHover(editor.document.uri, mark) };
+				const renderOptions = inlineText(mark, line.text);
+				if (renderOptions) {
+					texts.push({ range, renderOptions });
+				}
 				if (mark.kind === 'status') {
 					if (mark.failed && mark.tests.length === 0) {
 						statusFailed.push(item);
@@ -119,7 +148,8 @@ export class DecorationController {
 					}
 					continue;
 				}
-				(mark.kind === 'test' ? mark.failed ? testFailed : testPassed : mark.failed ? failed : passed).push(item);
+				(mark.kind === 'test' ? mark.failed ? testFailed : testPassed : mark.crashed ? crashed : mark.failed ? failed : passed)
+					.push(item);
 			}
 		}
 		setDecorations(editor, this.passType, passed);
@@ -128,6 +158,8 @@ export class DecorationController {
 		setDecorations(editor, this.testFailType, testFailed);
 		setDecorations(editor, this.statusFailType, statusFailed);
 		setDecorations(editor, this.statusHoverType, statusHover);
+		setDecorations(editor, this.crashType, crashed);
+		afterTyping(`text ${editor.document.uri}`, () => setDecorations(editor, this.textType, texts));
 	}
 }
 
@@ -163,15 +195,19 @@ function coverageHover(uri: Uri, mark: LineCoverageMark): MarkdownString {
 }
 
 export function slowTestMilliseconds(): number {
-	return workspace.getConfiguration('strict').get<number>('slowTestMilliseconds', 10);
+	return workspace.getConfiguration('strict').get<number>('slowTestMilliseconds', 20);
 }
 
-function inlineText(mark: LineCoverageMark): DecorationOptions['renderOptions'] {
+/** A failure or slowdown after line, else a small faint hint: the time of a method's tests or how often line ran. */
+function inlineText(mark: LineCoverageMark, line: string): DecorationOptions['renderOptions'] {
 	const failure = formatInlineFailure(mark);
 	const slow = formatInlineSlow(mark, slowTestMilliseconds());
-	const text = failure ?? slow;
-	return text ? { after: { contentText: `  ${text}`, color: failure ? '#a9a9a9' : new ThemeColor('editorWarning.foreground') } }
-		: undefined;
+	const hint = mark.kind === 'status' ? formatDuration(mark.durationMs) : mark.value && formatInlineValue(mark.value, line);
+	const margin = '0 0 0 2ch';
+	return failure ?? slow ? { after: { contentText: failure ?? slow, margin, color: failure ? '#a9a9a9'
+		: new ThemeColor('editorWarning.foreground') } }
+		: hint ? { after: { contentText: hint, margin, color: new ThemeColor('editorCodeLens.foreground'),
+			textDecoration: 'none; font-size: 0.85em; opacity: 0.6' } } : undefined;
 }
 
 function uriKeys(uri: string): string[] {
@@ -189,4 +225,9 @@ function uriKeys(uri: string): string[] {
 export function registerDecorationLifecycle(context: ExtensionContext, decorations: DecorationController): void {
 	context.subscriptions.push({ dispose: () => decorations.dispose() });
 	context.subscriptions.push(window.onDidChangeVisibleTextEditors(() => decorations.refreshVisibleEditors()));
+	context.subscriptions.push(workspace.onDidChangeTextDocument((event) => {
+		if (event.document.languageId === 'strict' && event.contentChanges.length > 0) {
+			lastTyped = Date.now();
+		}
+	}));
 }

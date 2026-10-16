@@ -131,7 +131,10 @@ export class StrictLanguage implements vscode.Disposable {
 				.map((entry) => item(entry.name, vscode.CompletionItemKind.Field, `has ${entry.name} (${entry.owner.name})`, '1'));
 		}
 		if (!/^\s/.test(before)) {
-			return [...['has', 'constant', 'mutable'].map((name) => item(name, vscode.CompletionItemKind.Keyword, '', '0')), ...typeItems];
+			const keywordItems = ['has', 'constant', 'mutable'].map((name) => item(name, vscode.CompletionItemKind.Keyword, '', '0'));
+			// a method named like a type hides it: Fibonacci(5).Fibonacci calls the method instead of creating a Fibonacci
+			return before === '' ? [...keywordItems, item('Get', vscode.CompletionItemKind.Method, 'Get ReturnType', '1')]
+				: [...keywordItems, ...typeItems];
 		}
 		const ownMembers = membersOf({ type: scope.own }, scope.types).filter((entry) => entry.owner === scope.own);
 		return ranked([

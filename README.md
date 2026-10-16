@@ -26,22 +26,32 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
   `has celsius Number` next to `Number.Clamp`. The quick fix replaces the implementation with that call, the related
   information links the existing method.
 - **SCrunch** — every `.strict` file in the workspace is tested when the folder opens (`strict test`, the
-  inline tests on the Strict VM). Saving a file (also outside VS Code) re-tests it first, then every file that mentions
-  its type, directly or through other types. Strict itself skips a type whose `.strictbinary` is up to date (no file
+  inline tests on the Strict VM). Strict files save themselves 0.5 s after you type (`files.autoSave` for `[strict]`), a
+  saved file (also outside VS Code) is re-tested first, then every file that mentions its type, directly or through other
+  types. The gutter updates with every result, errors (squiggles, Problems), end of line texts and Test Results wait until
+  you stopped typing for 1 s, so half typed lines don't flood you with errors. Strict itself skips a type whose `.strictbinary` is up to date (no file
   it read changed) and reports it as passed, the Testing view shows `cached` then. Only the lines Strict reports are
   tests: a line it did not print is no test (also not a passed one). The status bar shows the passed, failed and slow
   tests and spins while Strict runs, errors of `strict test` (parse errors, unknown types) mark the type as errored.
-- **Inline test marks** — ✓/✗ in the gutter on test lines, green/red dots on covered implementation lines, `expected … got …`
-  after a failing `is` test, `✓ 20us` after each method header.
+- **Inline test marks** — ✓/✗ in the gutter on test lines, green dots on covered implementation lines, red ones when a test
+  of the method failed (up to the line it got to), a big ✗ with the error on the line a test crashed in, `expected … got …`
+  after a failing `is` test. Small faint hints after the code show how long the tests of each method took (`20us`) and
+  how often each line ran in the tests of a visible file (`strict test <file> <root> values`, once per test of the file;
+  a line that ran once only in a `for`, `if` or `else`) with what it calculated when that was the same on every hit and
+  the line doesn't already show it (`sum = 5 + 3 = 8`, `10 + 5 = 15`, never a `true` result), else its values per hit
+  (`7 times: false, true, true`, a `for` its elements, the first 10). Hints are cut after 100 characters, the hover
+  shows all of it.
 - **Test timings** — every test shows how long it took (Strict prints it, `(0.02 ms)`): in the hover and in the Testing
   view, which sums methods and types (`…` > Sort by Duration, View as List). Tests and methods from
-  `strict.slowTestMilliseconds` (10 ms) on show `slow: 238ms` after the line and get the `slow` tag (filter the Testing
+  `strict.slowTestMilliseconds` (20 ms) on show `slow: 238ms` after the line and get the `slow` tag (filter the Testing
   view with `@strict.scrunch:slow`), a test over twice as slow as its last run shows `slow: 238ms (was 12ms)`. The last
   times are remembered, cached types show them. A type whose whole `strict test` (start, compile, tests, exit) takes 1 s
-  or more shows `strict test 65.6s` in the Testing view and in the Strict output, most take 30-250 ms.
+  or more shows that in the Strict output, start, compile and exit taking over 0.1 s more than the tests show in its Test
+  Results output (`strict test took 4.7s, its tests 7.6ms`).
   **SCrunch: Show Slowest Tests** lists those types and the slowest tests and opens one,
   Run in the Testing view (also the gutter, Run Test at Cursor, Rerun Failed) tests the type again without its cache
-  to time it, **SCrunch: Time All Tests** does that for every type.
+  to time it, **SCrunch: Time All Tests** does that for every type. `strict` runs below normal priority, so testing on
+  every core keeps VS Code responsive, and closing VS Code stops the running tests.
 - **Coverage and slow lines** — **Run with Coverage** (Testing view, gutter, **Test: Run All Tests with Coverage**)
   builds the tests of a type natively and counts every line (`strict test <file> lines`, 0.5-20 s): the Test Coverage
   view and the coverage gutter show how often each implementation line ran, lines that never ran lose their green mark,
@@ -49,9 +59,11 @@ the native Strict compiler `strict.exe`, which is written in Strict and compiled
   the methods the line calls, self does not). The counts stay until the type is tested again. Native times are faster
   than usual, they are not remembered for `slow: … (was …)`, a failed native build keeps the last results.
 - **Testing view** — package folder → type → methods with tests. Refresh re-tests the whole workspace. `Run` methods
-  without tests are run on request (Run Manual profile) and show their output. Test Results groups methods by type, only
-  types whose results changed are published again (VS Code shows the type and package of each method in grey, durations
-  are in the Testing view), stack frames in the output are clickable `file:line` links.
+  without tests are run on request (Run Manual profile) and show their output. While SCrunch tests, types whose results changed
+  are published at most every 3 s, once it is idle all are published again, so the newest result (the one the Testing
+  summary counts, VS Code keeps only 128) has every method. Each publish is one run (a run per type made VS Code hold
+  hundreds of MB per result), methods only write output when they failed or printed something, stack frames in it are
+  clickable `file:line` links. The time in the Testing summary is how long that publish took, not the tests.
 - **Generated files hidden** — `files.exclude` defaults hide `.strictbinary`, and `.test`, `.exe`, `.mlir`, `.ll` next
   to their `.strict` file. Builds without extension (Linux) nest under it with `explorer.fileNesting.enabled`.
 - **Validator diagnostics** — `strict check` runs over the folder of every tested file (unused members,
@@ -165,8 +177,9 @@ its `Run` method. Without tasks.json **Tasks: Run Task** → **strict** already 
 | Setting | Meaning |
 | --- | --- |
 | `strict.root` | Strict folder with `strict.exe` and the base types. Empty = newest found (see above) |
-| `strict.slowTestMilliseconds` | Tests, methods and lines of coverage runs taking at least this long are marked slow (default 10) |
-| `strict.timeoutSeconds` | SCrunch stops `strict test` of a type after this many seconds (default 60) |
+| `strict.slowTestMilliseconds` | Tests, methods and lines of coverage runs taking at least this long are marked slow (default 20) |
+| `strict.timeoutSeconds` | SCrunch stops `strict test` of a type after this many seconds (default 60), the test it was running shows `Timed out after 60 s in …`, later tests did not run |
+| `strict.onDemandFolders` | Folders (any depth) of slow types (default Compiler, Bytecode, Runtime): tested when saved or run in the Testing view, at start only when their `.strictbinary` is newer, not when a type they use changed |
 | `strict.suggestImplementations` | Suggest implementations from the tests of a method (default true) |
 | `strict.checkExistingMethods` | Report `MethodAlreadyExists` for methods an existing method already does (default true) |
 
@@ -176,7 +189,7 @@ its `Run` method. Without tasks.json **Tasks: Run Task** → **strict** already 
 | --- | --- | --- |
 | `Strict: Run File` | `Ctrl+Shift+R` / `Cmd+Shift+R` | Save and run the current file's `Run` method |
 | `Strict: Run File with Arguments...` | — | Same, asks for arguments passed to `Run` |
-| `SCrunch: Show in Testing window` | — | Focus the Testing view (SCrunch tree) |
+| `SCrunch: Show in Testing window` | beaker in the editor title, editor context menu | Reveal the method at the cursor (else its type) in the Testing view |
 | `SCrunch: Show Tests for Line` | — | List tests that covered the current line and show that result |
 | `SCrunch: Show Slowest Tests` | — | List the slowest tests of the last runs, open the picked one |
 | `SCrunch: Time All Tests (without cache)` | — | Remove the `.strictbinary` caches and run every test again to time it |

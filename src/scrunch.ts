@@ -30,8 +30,8 @@ import {
 	workspace
 } from 'vscode';
 import * as path from 'path';
-import { DecorationController, slowTestMilliseconds } from './decorations';
-import { gitIgnored, LineCount } from './nativeCompiler';
+import { afterTyping, DecorationController, slowTestMilliseconds } from './decorations';
+import { gitIgnored, LineCount, LineValue } from './nativeCompiler';
 import { isIgnoredBy, normalizeFsPath } from './paths';
 import { discoverStrictTests, DiscoveredMethod, typeNameFromPath } from './scrunchDiscover';
 import {
@@ -86,7 +86,6 @@ export class ScrunchController implements Disposable {
 	private publishTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Fingerprints of the results each file was last published with, only changed files are published again. */
 	private readonly published = new Map<string, string>();
-	private publishedRuns = 0;
 	/** What git ignores per workspace folder (uri), a file counts for the innermost folder holding it. */
 	private ignored = new Map<string, Set<string>>();
 	private userRunDepth = 0;
@@ -99,6 +98,7 @@ export class ScrunchController implements Disposable {
 	private busyFiles = 0;
 	private readonly processTimes = new Map<string, { file: string; processMs: number; testsMs: number }>();
 	private readonly lineCounts = new Map<string, Map<number, LineCount>>();
+	private readonly values = new Map<string, Map<number, LineValue>>();
 	private readonly coverageDetails = new WeakMap<FileCoverage, StatementCoverage[]>();
 
 	constructor(private readonly decorations: DecorationController, private readonly tester: ScrunchTester,
@@ -130,7 +130,6 @@ export class ScrunchController implements Disposable {
 				? this.findFileItem(event.document.uri) : undefined;
 			if (fileItem) {
 				this.controller.invalidateTestResults(fileItem);
-				this.refreshCoverage(event.document.uri);
 			}
 		}));
 		this.disposables.push(languages.onDidChangeDiagnostics((event) => {
@@ -169,15 +168,16 @@ export class ScrunchController implements Disposable {
 		}
 		this.busyFiles = Math.max(0, this.busyFiles + (isBusy ? 1 : -1));
 		this.updateStatus();
+		if (this.busyFiles === 0) {
+			// once idle all types go into the newest result: the Testing summary counts only it, VS Code keeps only 128
+			this.published.clear();
+			this.queuePublish();
+		}
 	}
 
-	/** Time of the whole `strict test` of file next to its tests, a slow start, compile or exit shows on the type. */
+	/** Time of the whole `strict test` of file next to its tests, start, compile and exit over 0.1 s show in its output. */
 	public setProcessTime(file: string, processMs: number, testsMs: number): void {
 		this.processTimes.set(keyOf(Uri.file(file)), { file, processMs, testsMs });
-		const fileItem = this.findFileItem(Uri.file(file));
-		if (fileItem) {
-			fileItem.description = processMs >= slowProcessMs ? `strict test ${formatDuration(processMs)}` : undefined;
-		}
 	}
 
 	/** Passed, failed and slow tests of the last runs in the status bar, spinning while Strict runs. */
@@ -215,6 +215,16 @@ export class ScrunchController implements Disposable {
 		Object.keys(this.timings).filter((name) => name.startsWith(`${key}|`) && !current.has(name) &&
 			!results.some((result) => result.cached)).forEach((name) => delete this.timings[name]);
 		results.forEach((result) => this.applyResult(counts ? { ...result, native: true } : result));
+		this.refreshCoverage(uri);
+	}
+
+	/** Hit counts and assigned values of the lines of file from `strict test <file> <root> values`, shown after them. */
+	public applyValues(file: string, values: LineValue[]): void {
+		const uri = Uri.file(file);
+		const key = keyOf(uri);
+		this.values.set(key, new Map(values.filter((value) => normalizeFsPath(value.file) === key).map((value) =>
+			[value.line, value])));
+		this.refreshCoverage(uri);
 	}
 
 	public applyResult(message: TestRunnerNotification): void {
@@ -252,10 +262,9 @@ export class ScrunchController implements Disposable {
 		this.saveTimer ??= setTimeout(() => {
 			this.saveTimer = undefined;
 			void this.memento.update(timingsKey, this.timings);
-		}, 2000);
+		}, 30000);
 		byLine.set(line, { ...timed, lineNumber: line, uri: uri.toString() });
 		this.ensureMethodItem(uri, method);
-		this.refreshCoverage(uri);
 		if (this.userRunDepth === 0) {
 			this.queuePublish();
 		}
@@ -401,6 +410,7 @@ export class ScrunchController implements Disposable {
 	private invalidate(uri: Uri): void {
 		this.published.delete(keyOf(uri));
 		this.results.delete(keyOf(uri));
+		this.values.delete(keyOf(uri));
 		const fileItem = this.findFileItem(uri);
 		if (fileItem) {
 			fileItem.description = undefined;
@@ -445,11 +455,14 @@ export class ScrunchController implements Disposable {
 		}
 	}
 
+	// ponytail: each publish is a result in Test Results (VS Code keeps 128, fixed), so while types are tested at most one per
+	// 3 s, once idle right away; upgrade: one run kept open while testing if 3 s still blinks too much
 	private queuePublish(): void {
-		if (this.publishTimer) {
-			clearTimeout(this.publishTimer);
+		if (this.publishTimer && this.busyFiles > 0) {
+			return;
 		}
-		this.publishTimer = setTimeout(() => this.publishAll(), 40);
+		clearTimeout(this.publishTimer);
+		this.publishTimer = setTimeout(() => afterTyping('publish', () => this.publishAll()), this.busyFiles > 0 ? 3000 : 40);
 	}
 
 	private publishAll(): void {
@@ -458,13 +471,9 @@ export class ScrunchController implements Disposable {
 		for (const key of this.methods.keys()) {
 			this.refreshCoverage(Uri.file(key));
 		}
-		// ponytail: VS Code keeps 128 results, a file published only long ago would lose its states, so all are published again
-		if (++this.publishedRuns > 100) {
-			this.publishedRuns = 0;
-			this.published.clear();
-		}
 		const request = new TestRunRequest(undefined, undefined, undefined, false, true);
-		const runs: TestRun[] = [];
+		// One run: VS Code gives every item of a result a state per run, a run per type made each full publish cost 250 MB
+		let run: TestRun | undefined;
 		const printed = new Set<string>();
 		for (const key of this.methods.keys()) {
 			const fileItem = this.findFileItem(Uri.file(key));
@@ -474,8 +483,7 @@ export class ScrunchController implements Disposable {
 			}
 			this.published.set(key, fingerprint);
 			const uri = fileItem.uri;
-			const run = this.controller.createTestRun(request, fileItem.label, false);
-			runs.push(run);
+			run ??= this.controller.createTestRun(request, 'SCrunch', false);
 			this.dropUnknownMethods(uri, fileItem);
 			const byLine = this.results.get(key) ?? new Map();
 			const discovered = this.methods.get(key) ?? [];
@@ -487,8 +495,12 @@ export class ScrunchController implements Disposable {
 					this.publishMethod(run, uri, this.ensureMethodItem(uri, method), method, summary, printed);
 				}
 			}
+			const time = this.processTimes.get(key);
+			if (time && time.processMs - time.testsMs >= 100) {
+				run.appendOutput(`${fileItem.label}: strict test took ${formatDuration(time.processMs)}, its tests ${formatDuration(time.testsMs)}\r\n`);
+			}
 		}
-		runs.forEach((run) => run.end());
+		run?.end();
 	}
 
 	private fingerprint(key: string): string {
@@ -508,7 +520,7 @@ export class ScrunchController implements Disposable {
 			? formatErrorSummary(summary.messages.find((item) => item.state === 0)?.message)
 			: summary.cached ? 'cached' : undefined;
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
-		this.appendMethodOutput(run, uri, methodItem, method.lineNumber, summary,
+		this.appendMethodOutput(run, methodItem, summary,
 			unprintedOutput(methodOutput(summary), keyOf(uri), printed, this.where(uri)));
 		methodItem.tags = isManualMethod(method) ? [this.manualTag] : (durationMs ?? 0) >= slowTestMilliseconds()
 			? [this.slowTag] : [];
@@ -520,21 +532,24 @@ export class ScrunchController implements Disposable {
 		run.passed(methodItem, durationMs);
 	}
 
-	/** methodLine of item after its header, then output if any. */
-	private appendMethodOutput(run: TestRun, uri: Uri, item: TestItem, line: number, summary: MethodSummary,
-		output: string | undefined): void {
+	/** methodLine of item before its output, none without (each output costs VS Code memory in every result), the method
+	 * header shows the time with the decorations, the Testing view next to the method. */
+	private appendMethodOutput(run: TestRun, item: TestItem, summary: MethodSummary, output: string | undefined): void {
+		if (!output) {
+			return;
+		}
 		const text = [methodLine(summary.failed, summary.hasDuration ? summary.duration : undefined), output]
 			.filter(Boolean).join('\n');
-		run.appendOutput(text.replace(/\n/g, '\r\n') + '\r\n', new Location(uri, new Position(line, 0)), item);
+		run.appendOutput(text.replace(/\n/g, '\r\n') + '\r\n', undefined, item);
 	}
 
-	/** Marks of the last results, none while the document has unsaved changes (their lines may have moved). */
+	/** Marks of the last results, kept while typing (the editor moves them with their lines), the next test replaces them. */
 	private refreshCoverage(uri: Uri): void {
-		const isDirty = workspace.textDocuments.some((document) => keyOf(document.uri) === keyOf(uri) && document.isDirty);
 		const results = this.results.get(keyOf(uri)) ?? new Map();
 		const errorLines = new Set(testErrors(languages.getDiagnostics(uri)).map((item) => item.range.start.line));
-		this.decorations.applyCoverage(uri.toString(), isDirty ? []
-			: lineCoverageMarks(this.methodsFor(uri), results, errorLines, this.lineCounts.get(keyOf(uri))));
+		const values = this.values.get(keyOf(uri));
+		this.decorations.applyCoverage(uri.toString(), lineCoverageMarks(this.methodsFor(uri), results, errorLines,
+			this.lineCounts.get(keyOf(uri))).map((mark) => ({ ...mark, value: values?.get(mark.lineNumber) })));
 	}
 
 	private toMessage(uri: Uri, message: TestRunnerNotification): TestMessage {
@@ -612,42 +627,35 @@ export class ScrunchController implements Disposable {
 		await commands.executeCommand('workbench.panel.testResults.view.focus');
 	}
 
-	/** Tests the files of the requested items again without cache (to time them), one result task per type, with line counts
+	/** Tests the files of the requested items again without cache (to time them) in one run, with line counts
 	 * for the Coverage profile, the Stop button kills Strict. */
 	private async onRunRequest(request: TestRunRequest, token: CancellationToken): Promise<void> {
 		const items = itemsIn(request, this.controller);
-		const runs = new Map<string, TestRun>();
-		const runOf = (uri?: Uri): TestRun => {
-			const file = uri?.fsPath ?? '';
-			if (!runs.has(file)) {
-				runs.set(file, this.controller.createTestRun(request, uri ? typeNameFromPath(file) : 'SCrunch', true));
-			}
-			return runs.get(file)!;
-		};
+		const run = this.controller.createTestRun(request, 'SCrunch', true);
 		const abort = new AbortController();
 		const cancelled = token.onCancellationRequested(() => abort.abort());
 		this.userRunDepth += 1;
 		try {
 			const tested = items.filter((item) => this.methodOfItem(item)?.tests.length);
-			tested.forEach((item) => runOf(item.uri).started(item));
+			tested.forEach((item) => run.started(item));
 			const files = [...new Set(tested.map((item) => item.uri!.fsPath))];
 			const isCoverage = request.profile?.kind === TestRunProfileKind.Coverage;
 			await this.tester.retest(files, abort.signal, isCoverage);
 			for (const item of items) {
 				if (token.isCancellationRequested) {
-					runOf(item.uri).skipped(item);
+					run.skipped(item);
 				} else {
-					await this.runOne(runOf(item.uri), request, item, abort.signal);
+					await this.runOne(run, request, item, abort.signal);
 				}
 			}
 			if (isCoverage && !token.isCancellationRequested) {
-				files.forEach((file) => this.addCoverage(runOf(Uri.file(file)), Uri.file(file)));
+				files.forEach((file) => this.addCoverage(run, Uri.file(file)));
 			}
 			files.forEach((file) => this.published.set(keyOf(Uri.file(file)), this.fingerprint(keyOf(Uri.file(file)))));
 		} finally {
 			cancelled.dispose();
 			this.userRunDepth -= 1;
-			runs.forEach((run) => run.end());
+			run.end();
 			this.queuePublish();
 		}
 		const first = items.find((item) => item.uri);
@@ -766,7 +774,7 @@ export class ScrunchController implements Disposable {
 		item.description = summary.failed
 			? formatErrorSummary(primary.message)
 			: undefined;
-		this.appendMethodOutput(run, uri, item, method.lineNumber, summary, formatMethodOutput(methodOutput(summary), this.where(uri)));
+		this.appendMethodOutput(run, item, summary, formatMethodOutput(methodOutput(summary), this.where(uri)));
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
 		if (summary.failed) {
 			const failed = all.filter((message) => message.state === 0);

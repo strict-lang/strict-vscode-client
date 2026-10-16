@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { compilerFile, normalizeFsPath } from './paths';
 import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
@@ -9,11 +10,15 @@ export type StrictRun = { exitCode: number; output: string; durationMs: number }
 export type RunOptions = { signal?: AbortSignal; timeoutMs?: number; cwd?: string; input?: string };
 export type CheckIssue = { file: string; line: number; rule: string; target: string };
 export type LineCount = { file: string; line: number; executions: number; ms: number; selfMs: number };
+/** How often a line ran in `strict test <file> <root> values` with what it calculated when that was the same on every hit
+ * (`sum = 5 + 3 = 8` is name sum, value `5 + 3 = 8`), else each, its values per hit (`false, true, ...`). */
+export type LineValue = { file: string; line: number; hits: number; name?: string; value?: string; each?: string };
 
 const defaultTimeoutMs = 60000;
 const summaryLine = /^(All tests passed|\d+ (tests )?failed) in /m;
 const builtLine = /^Built .+\.test(\.exe)?$/;
 const lineCount = /^Line (.+?\.strict):(\d+) executed (\d+) times in (\d+(?:\.\d+)?) ms \(self (-?\d+(?:\.\d+)?) ms\)$/;
+const valueLine = /^Value (.+?\.strict):line (\d+) hit (\d+) times(?:(, each: (.*))|: (.+?) = (.*))?$/;
 const testLine = /^Test (passed|failed): (.*) in (\S+?)(?: at .+:line (\d+))?$/;
 const stackLine = /^\s+at .+ in .+:line \d+$/;
 const issuePattern = /^(.+?\.strict):line (\d+): (\w+): (.*)$/;
@@ -82,9 +87,18 @@ export function runProcess(file: string, args: string[], cwd: string, options: R
 	});
 }
 
-/** file started in cwd as the leader of the processes it starts (elsewhere than Windows), for stopProcess. */
+/** file started in cwd below normal priority (many tests at once must not slow VS Code) as the leader of the processes it
+ * starts (elsewhere than Windows), for stopProcess. */
 export function startProcess(file: string, args: string[], cwd: string): ChildProcess {
-	return spawn(file, args, { cwd, windowsHide: true, detached: process.platform !== 'win32' });
+	const child = spawn(file, args, { cwd, windowsHide: true, detached: process.platform !== 'win32' });
+	try {
+		if (child.pid !== undefined) {
+			os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
+		}
+	} catch {
+		// it already ended, the close event reports that
+	}
+	return child;
 }
 
 /** Kills child started by startProcess unless it ended, with the processes it started: killing only child leaves them running. */
@@ -122,7 +136,8 @@ export function crashLine(output: string, file: string, root: string): number | 
 /** One result per test line Strict printed, every discovered test when it only printed a cached pass or crashed. */
 export function testResults(source: string, uri: string, run: StrictRun): TestRunnerNotification[] {
 	const lines = run.output.split(/\r?\n/).map((line) => line.replace(testDuration, ''));
-	const crash = crashText(run);
+	let crash = crashText(run);
+	let timedOut = /^Timed out after \S+ s$/m.exec(run.output)?.[0];
 	const consoleOutput = crash === undefined && printedText(run.output) || undefined;
 	const printed = run.output.split(/\r?\n/).flatMap((line, index) => {
 		const match = testLine.exec(lines[index]);
@@ -155,6 +170,9 @@ export function testResults(source: string, uri: string, run: StrictRun): TestRu
 			: candidate.expression === test.expression && candidate.method === method.name);
 		if (found) {
 			reported.add(found);
+		} else if (timedOut) {
+			crash = `${timedOut} in ${test.expression} (line ${test.lineNumber + 1}), later tests did not run`;
+			timedOut = undefined;
 		}
 		return found || isCached || crash !== undefined ? [result(test.expression, test.lineNumber, method.name, found)] : [];
 	}));
@@ -180,6 +198,14 @@ export function lineCounts(output: string, root: string): LineCount[] {
 	});
 }
 
+export function lineValues(output: string, root: string): LineValue[] {
+	return output.split(/\r?\n/).flatMap((line) => {
+		const match = valueLine.exec(line);
+		return match ? [{ file: path.resolve(root, match[1]), line: Number(match[2]) - 1, hits: Number(match[3]),
+			name: match[4] ? undefined : match[6], value: match[4] ? undefined : match[7], each: match[4] ? match[5] : undefined }] : [];
+	});
+}
+
 // ponytail: impact by type name mentions, over-approximates common names like Type, O(n²) on long chains; upgrade: dependencies from Strict
 export function dependents(changed: string, sources: Map<string, string>): string[] {
 	let remaining = [...sources].filter(([file]) => file !== changed);
@@ -191,4 +217,9 @@ export function dependents(changed: string, sources: Map<string, string>): strin
 		affected.push(...hits.map(([file]) => file));
 	}
 	return affected.slice(1);
+}
+
+/** Whether a folder of file, a path relative to the workspace, is one of folders (strict.onDemandFolders). */
+export function isOnDemand(file: string, folders: string[]): boolean {
+	return path.dirname(file).split(/[\\/]/).some((folder) => folders.includes(folder));
 }

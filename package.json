@@ -48,7 +48,8 @@
       {
         "command": "strict-vscode-client.scrunch.focus",
         "title": "Show in Testing window",
-        "category": "SCrunch"
+        "category": "SCrunch",
+        "icon": "$(beaker)"
       },
       {
         "command": "strict-vscode-client.scrunch.showLineTests",
@@ -125,7 +126,7 @@
           {
             "id": "test",
             "title": "Test",
-            "description": "Tests run on every save: the gutter shows passed and failed tests, failures are shown inline and in the Testing view. **Shift+Enter** evaluates a selection.\n[Open Testing](command:workbench.view.testing.focus)",
+            "description": "Tests run while you type (Strict files save themselves): the gutter shows passed and failed tests right away, errors, inline failures and the Testing view follow once you stop typing for a second. **Shift+Enter** evaluates a selection.\n[Open Testing](command:workbench.view.testing.focus)",
             "media": {
               "markdown": "media/test.md"
             },
@@ -158,6 +159,13 @@
           "command": "strict-vscode-client.run",
           "when": "resourceLangId == strict",
           "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "strict-vscode-client.scrunch.focus",
+          "when": "resourceLangId == strict",
+          "group": "navigation"
         }
       ],
       "testing/item/gutter": [
@@ -325,6 +333,8 @@
         "files.trimTrailingWhitespace": true,
         "files.insertFinalNewline": false,
         "files.trimFinalNewlines": true,
+        "files.autoSave": "afterDelay",
+        "files.autoSaveDelay": 500,
         "editor.rulers": [
           120
         ]
@@ -339,9 +349,15 @@
           "minimum": 1,
           "markdownDescription": "SCrunch stops `strict test` of a type after this many seconds (long trainings on the Strict VM need more)."
         },
+        "strict.onDemandFolders": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["Compiler", "Bytecode", "Runtime"],
+          "markdownDescription": "Types in folders of these names (at any depth) are slow to test, SCrunch tests them when you save them or run them in the Testing view, at start only when their cached result is newer than their file, not when a type they use changed."
+        },
         "strict.slowTestMilliseconds": {
           "type": "number",
-          "default": 10,
+          "default": 20,
           "minimum": 0,
           "markdownDescription": "Tests (and all tests of a method, on its header) and lines of a Run with Coverage taking at least this long show `slow: …` after the line and get the `slow` tag (filter the Testing view with `@strict.scrunch:slow`). Most types run all their tests in under 1 ms. **SCrunch: Show Slowest Tests** lists the slowest ones."
         },

@@ -5,12 +5,12 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { registerCodeActionProvider } from './codeActions';
 import { registerRunLenses } from './codeLens';
-import { DecorationController, registerDecorationLifecycle, showResultCommand } from './decorations';
+import { afterTyping, DecorationController, registerDecorationLifecycle, showResultCommand } from './decorations';
 import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
 import { StrictLanguage } from './language';
 import { refreshStatusCommand, registerLanguageStatus } from './languageStatus';
 import {
-	checkIssues, crashLine, crashText, dependents, lineCounts, runStrict, startProcess, stopProcess, testResults
+	checkIssues, crashLine, crashText, dependents, isOnDemand, lineCounts, lineValues, runStrict, startProcess, stopProcess, testResults
 } from './nativeCompiler';
 import {
 	compilerFile, findStrictRoot, normalizeFsPath, projectFolder, resolveIn, rootArgument, strictNotFound, strictPath, strictRoots
@@ -62,6 +62,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand('strict-vscode-client.scrunch.timeAll', () => tester.timeAll()),
 		vscode.commands.registerCommand(showResultCommand, (uri: string, lineNumber: number) =>
 			scrunch.showResult(uri, lineNumber)),
+		vscode.window.onDidChangeVisibleTextEditors(() => tester.showValues()),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration('strict.root')) {
 				void scrunch.discoverWorkspace();
@@ -175,18 +176,29 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	private readonly aborts = new Map<string, AbortController>();
 	private readonly waiting = new Map<string, Array<() => void>>();
 	private readonly withLines = new Set<string>();
+	/** Files whose values were asked for since their last test. */
+	private readonly valued = new Set<string>();
 	private running = 0;
 
 	constructor(private readonly scrunch: () => ScrunchController) {}
 
 	public dispose(): void {
+		this.aborts.forEach((abort) => abort.abort());
 		this.checks.dispose();
 		this.crashes.dispose();
 	}
 
+	// ponytail: an on demand file is only tested at start when its .strictbinary is newer (Strict prints its cached pass), a
+	// changed type it uses makes that a full run; upgrade: Strict tells whether its cache is still valid
 	public testAll(files: string[]): void {
 		files.forEach((file) => this.files.add(file));
-		this.enqueue([...new Set(files.map((file) => path.dirname(file))), ...files]);
+		const automatic = files.filter((file) => !this.isOnDemand(file) || isNewer(file.replace(/\.strict$/, '.strictbinary'), file));
+		this.enqueue([...new Set(automatic.map((file) => path.dirname(file))), ...automatic]);
+	}
+
+	private isOnDemand(file: string): boolean {
+		return isOnDemand(vscode.workspace.asRelativePath(file, false),
+			vscode.workspace.getConfiguration('strict').get<string[]>('onDemandFolders', []));
 	}
 
 	/** Runs every test again to time it. */
@@ -236,7 +248,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	public changed(file: string): void {
 		this.files.add(file);
 		const sources = new Map([...this.files].map((known) => [known, readText(known)]));
-		this.enqueue([file, path.dirname(file), ...dependents(file, sources)], true);
+		this.enqueue([file, path.dirname(file), ...dependents(file, sources).filter((other) => !this.isOnDemand(other))], true);
 	}
 
 	public deleted(file: string): void {
@@ -329,7 +341,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			diagnostic.source = testErrorSource;
 			diagnostic.code = /^(\w+): /.exec(diagnostic.message)?.[1];
 		}
-		this.crashes.set(uri, diagnostic ? [diagnostic] : []);
+		afterTyping(`crashes ${file}`, () => this.crashes.set(uri, diagnostic ? [diagnostic] : []));
 		if (crash) {
 			output.appendLine(`${file}: ${crash}`);
 		}
@@ -342,6 +354,30 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			this.scrunch().setProcessTime(file, result.durationMs, testsMs);
 		}
 		this.scrunch().applyResults(file, notifications, counts);
+		this.valued.delete(file);
+		this.showValues();
+	}
+
+	/** Hit counts and assigned values of the lines of each visible tested file, once per test of it. */
+	public showValues(): void {
+		const root = strictRoot();
+		for (const file of new Set(vscode.window.visibleTextEditors.map((editor) => editor.document.uri.fsPath))) {
+			if (root && this.files.has(file) && !this.valued.has(file)) {
+				this.valued.add(file);
+				void this.values(root, file);
+			}
+		}
+	}
+
+	// ponytail: a traced VM run per visible file, cut after 20 s (it can run out of memory), a slower older run may replace
+	// newer values; upgrade: values with the normal test run once Strict makes tracing cheap
+	private async values(root: string, file: string): Promise<void> {
+		const project = projectOf(file);
+		const result = await runStrict(root, ['test', strictPath(project, file), rootArgument(project, root), 'values'],
+			{ cwd: project, timeoutMs: 20000 });
+		if (this.valued.has(file)) {
+			this.scrunch().applyValues(file, lineValues(result.output, project));
+		}
 	}
 
 	private async check(root: string, folder: string): Promise<void> {
@@ -356,13 +392,22 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			concat(issues.map((issue) => issue.file)).map((file) => [normalizeFsPath(file), file]));
 		for (const [key, file] of files) {
 			const source = readText(file);
-			this.checks.set(vscode.Uri.file(file), issues.filter((issue) => normalizeFsPath(issue.file) === key).map((issue) => {
+			const diagnostics = issues.filter((issue) => normalizeFsPath(issue.file) === key).map((issue) => {
 				const diagnostic = new vscode.Diagnostic(lineRange(source, issue.line), issue.target,
 					vscode.DiagnosticSeverity.Error);
 				diagnostic.code = issue.rule;
 				return polishDiagnostic(diagnostic, vscode.Uri.file(file), root);
-			}));
+			});
+			afterTyping(`checks ${file}`, () => this.checks.set(vscode.Uri.file(file), diagnostics));
 		}
+	}
+}
+
+function isNewer(file: string, than: string): boolean {
+	try {
+		return fs.statSync(file).mtimeMs >= fs.statSync(than).mtimeMs;
+	} catch {
+		return false;
 	}
 }
 

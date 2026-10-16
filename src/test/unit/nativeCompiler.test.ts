@@ -3,7 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-	checkIssues, crashLine, crashText, dependents, gitIgnored, lineCounts, runProcess, testResults
+	checkIssues, crashLine, crashText, dependents, gitIgnored, isOnDemand, lineCounts, lineValues, runProcess, startProcess, stopProcess,
+	testResults
 } from '../../nativeCompiler';
 import { isIgnoredBy } from '../../paths';
 
@@ -16,6 +17,14 @@ const adder = [
 ].join('\n');
 
 suite('native compiler', () => {
+	test('started processes run below normal priority so many tests at once keep VS Code responsive', () => {
+		const child = startProcess(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], os.tmpdir());
+		try {
+			assert.strictEqual(os.getPriority(child.pid), os.constants.priority.PRIORITY_BELOW_NORMAL);
+		} finally {
+			stopProcess(child);
+		}
+	});
 	test('testResults marks the failing is-test with expected and actual, the others pass', () => {
 		const results = testResults(adder, 'file:///Adder.strict', {
 			exitCode: 1, durationMs: 30,
@@ -65,6 +74,14 @@ suite('native compiler', () => {
 			'Line Number.strict:40 executed 0 times in 0.00 ms (self -0.00 ms)\n', 'C:\\Strict'), [
 			{ file: path.resolve('C:\\Strict', 'Examples/A.strict'), line: 7, executions: 4, ms: 1.25, selfMs: 0.4 },
 			{ file: path.resolve('C:\\Strict', 'Number.strict'), line: 39, executions: 0, ms: 0, selfMs: 0 }]);
+	});
+
+	test('lineValues are how often each line ran with its value or its values per hit, zero based', () => {
+		assert.deepStrictEqual(lineValues('Test passed: A.Sum is 8 in Sum at Examples/A.strict:line 2 (0.1 ms)\n' +
+			'Value Examples/A.strict:line 8 hit 3 times: sum = 5 + 3 = 8\r\nValue Examples/A.strict:line 61 hit 7 times, each: false, true\n' +
+			'Value Number.strict:line 4 hit 2 times\n', 'C:\\Strict').map((value) => [value.line, value.hits, value.name, value.value,
+			value.each]), [[7, 3, 'sum', '5 + 3 = 8', undefined], [60, 7, undefined, undefined, 'false, true'],
+			[3, 2, undefined, undefined, undefined]]);
 	});
 
 	test('runProcess returns the output and exit code', async () => {
@@ -179,6 +196,18 @@ suite('native compiler', () => {
 		assert.strictEqual(results[0].message, undefined);
 		assert.strictEqual(results[0].consoleOutput, undefined);
 		assert.ok(results[1].message?.includes('3221225477'));
+	});
+
+	test('testResults names the test that timed out instead of a crash', () => {
+		const results = testResults(adder, 'file:///Adder.strict', {
+			exitCode: -1, durationMs: 60000, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\nTimed out after 60 s'
+		});
+		assert.strictEqual(results[1].message, 'Timed out after 60 s in Adder.Add(2, 2) is 4 (line 4), later tests did not run');
+	});
+
+	test('a file in an on demand folder at any depth is only tested on demand', () => {
+		assert.deepStrictEqual(['Compiler/Mlir.strict', 'Games/Runtime/Loop.strict', 'Number.strict', 'Compilers/A.strict']
+			.map((file) => isOnDemand(file, ['Compiler', 'Runtime'])), [true, true, false, false]);
 	});
 
 	test('crashText is the error Strict reports with its location, only real crashes name the exit code', () => {
