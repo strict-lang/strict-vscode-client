@@ -88,7 +88,8 @@ export function lineCoverageMarks(
 	methods: DiscoveredMethod[],
 	results: Map<number, TestRunnerNotification>,
 	errorLines: Set<number>,
-	counts = new Map<number, LineCount>()
+	counts = new Map<number, LineCount>(),
+	values?: Map<number, LineValue>
 ): LineCoverageMark[] {
 	const marks = new Map<number, LineCoverageMark>();
 	for (const method of visibleMethods(methods)) {
@@ -123,12 +124,15 @@ export function lineCoverageMarks(
 				});
 		}
 		const crash = crashOf(method, covering);
+		const traced = method.implementation.map((line) => values?.get(line.lineNumber)).find((value) => value !== undefined);
 		for (const line of method.implementation) {
 			const count = method.tests.length > 0 ? counts.get(line.lineNumber) : undefined;
+			const value = values?.get(line.lineNumber) ?? (traced ? { file: traced.file, line: line.lineNumber, hits: 0 } : undefined);
 			const isError = errorLines.has(line.lineNumber) || crash.lines.has(line.lineNumber);
 			const error = crash.errors.get(line.lineNumber);
-			if (isError || (count ? count.executions !== 0 : line.lineNumber <= crash.reach)) {
+			if (value || isError || (count ? count.executions !== 0 : line.lineNumber <= crash.reach)) {
 				paint(marks, line.lineNumber, 'coverage', covering, isError || failed, {
+					...value ? { value } : {},
 					...count ? { durationMs: count.ms, count } : { durationMs: totalDuration(covering), callCount: covering.length },
 					...error === undefined ? {} : { crashed: true, message: error }
 				});
@@ -188,11 +192,13 @@ export function formatInlineSlow(mark: LineCoverageMark, slowMs: number): string
 		: undefined;
 }
 
-/** How often line ran (once only in a loop or if) with what Strict printed: what it calculated the same on every hit unless
- * line already shows it (`mutable first = 1`), `5 + 3 = 8` (not when true), else its values per hit (`3 times: 1, 2, 1`). */
+/** Hit counts and compiler values, with compact results for returns and constructors and per-hit values when they vary. */
 export function formatInlineValue(value: LineValue, line: string): string {
 	if (value.each) {
 		return cut(`${times(value.hits)}: ${value.each}`);
+	}
+	if (value.value !== undefined && /^\s*(return\b|[A-Z]\w*\()/.test(line)) {
+		return cut(`${times(value.hits)}: ${value.value}`);
 	}
 	const isBranch = /^(\t\t|\t(for|if|else)\b)/.test(line);
 	const isTrueExpression = value.value === 'true' && !/^[A-Za-z][\w.]*$/.test(value.name ?? '');

@@ -549,7 +549,7 @@ export class ScrunchController implements Disposable {
 		const errorLines = new Set(testErrors(languages.getDiagnostics(uri)).map((item) => item.range.start.line));
 		const values = this.values.get(keyOf(uri));
 		this.decorations.applyCoverage(uri.toString(), lineCoverageMarks(this.methodsFor(uri), results, errorLines,
-			this.lineCounts.get(keyOf(uri))).map((mark) => ({ ...mark, value: values?.get(mark.lineNumber) })));
+			this.lineCounts.get(keyOf(uri)), values));
 	}
 
 	private toMessage(uri: Uri, message: TestRunnerNotification): TestMessage {

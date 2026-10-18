@@ -148,6 +148,10 @@ export class DecorationController {
 					}
 					continue;
 				}
+				if (mark.value?.hits === 0) {
+					statusHover.push(item);
+					continue;
+				}
 				(mark.kind === 'test' ? mark.failed ? testFailed : testPassed : mark.crashed ? crashed : mark.failed ? failed : passed)
 					.push(item);
 			}

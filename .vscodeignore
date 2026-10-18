@@ -17,3 +17,9 @@ out/test/**
 strict.mjs
 bun.lock
 Agents.md
+out/strict-work/**
+out/strict-verify/**
+out/*.py
+out/write-probe.txt
+Plan.md
+*.patch

@@ -149,7 +149,7 @@ export function implementationCandidates(method: StrictMethod, own: StrictType, 
 			callOf(`${value.name}.${existing.name}`, existing, values, [value.name])),
 		...methodsOfValues.filter(({ existing }) => !isNamed(existing.name) && existing.parameters.length === 1 &&
 			(!/\w/.test(existing.name) || wordOperators.has(existing.name)) && returns(existing)).flatMap(({ value, existing }) =>
-			values.filter((other) => other !== value && sameType(other.type, existing.parameters[0].type)).map((other) =>
+			values.filter((other) => sameType(other.type, existing.parameters[0].type)).map((other) =>
 				`${value.name} ${existing.name} ${other.name}`))
 	].filter((candidate): candidate is string => Boolean(candidate)))].slice(0, maximumCandidates);
 }

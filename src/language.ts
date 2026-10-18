@@ -4,31 +4,27 @@ import * as vscode from 'vscode';
 import { registerTypeFixes } from './codeActions';
 import { Evaluator } from './evaluate';
 import {
-	existingCalls, implementationCandidates, passingBodies, pendingTests, sharedRun, SharedRun, withImplementation
+	implementationCandidates, passingBodies, pendingTests, sharedRun, SharedRun
 } from './implementations';
 import { registerInsight } from './insight';
 import { calledMethods, expectedType, fits, typeText } from './insightModel';
 import { registerNavigation } from './navigation';
-import { normalizeFsPath, strictDocumentSelector } from './paths';
+import { compilerFile, normalizeFsPath, strictDocumentSelector } from './paths';
 import { registerRefactorings } from './refactoringProviders';
 import {
-	callBefore, chainBefore, Entry, isNamed, keywords, localOf, membersOf, parseType, resolve, Scope, scopeAt,
+	callBefore, chainBefore, Entry, keywords, localOf, membersOf, parseType, resolve, Scope, scopeAt,
 	strictFiles, StrictMethod, StrictParameter, StrictType, typeNamed
 } from './strictIndex';
 
-export const alreadyExists = 'MethodAlreadyExists';
 const rescanMs = 30000;
-const checkDelayMs = 1000;
 const cachedRuns = 100;
 type Found = { entries: Entry[]; type?: StrictType; line?: number; text?: string };
 
 /** Completion, hover, go to definition, signature help and symbols from the parsed .strict files of the workspace and of
- * the Strict folder; suggests implementations and reports methods that already exist, both verified with `strict test`. */
+ * the Strict folder; selected unfinished methods get suggestions, `strict check` reports duplicate bodies. */
 export class StrictLanguage implements vscode.Disposable {
 	private readonly parsed = new Map<string, { modified: number; type: StrictType }>();
-	private readonly existing = vscode.languages.createDiagnosticCollection('strict existing');
 	private readonly runs = new Map<string, SharedRun>();
-	private readonly timers = new Map<string, NodeJS.Timeout>();
 	private readonly disposables: vscode.Disposable[];
 	private all: StrictType[] = [];
 	private scanned = 0;
@@ -37,7 +33,6 @@ export class StrictLanguage implements vscode.Disposable {
 		const watcher = vscode.workspace.createFileSystemWatcher('**/*.strict');
 		const rescan = () => this.scanned = 0;
 		this.disposables = [watcher, watcher.onDidCreate(rescan), watcher.onDidChange(rescan), watcher.onDidDelete(rescan),
-			this.existing,
 			vscode.languages.registerCompletionItemProvider(strictDocumentSelector, { provideCompletionItems: (document, position,
 				_token, context) => this.complete(document, position, context.triggerCharacter) }, '.', ' '),
 			vscode.languages.registerHoverProvider(strictDocumentSelector,
@@ -51,22 +46,15 @@ export class StrictLanguage implements vscode.Disposable {
 			vscode.languages.registerWorkspaceSymbolProvider({ provideWorkspaceSymbols: (query) => this.workspaceSymbols(query) }),
 			vscode.languages.registerInlineCompletionItemProvider(strictDocumentSelector,
 				{ provideInlineCompletionItems: (document, position, _context, token) => this.suggest(document, position, token) }),
-			vscode.workspace.onDidOpenTextDocument((document) => this.scheduleCheck(document)),
-			vscode.workspace.onDidChangeTextDocument((event) => this.scheduleCheck(event.document)),
-			vscode.workspace.onDidCloseTextDocument((document) => this.existing.delete(document.uri)),
-			vscode.workspace.onDidChangeConfiguration((event) => event.affectsConfiguration('strict.checkExistingMethods') &&
-				vscode.workspace.textDocuments.forEach((document) => this.scheduleCheck(document))),
 			new Evaluator(root, project, (document, line) => this.scope(document, line)),
 			...registerNavigation(this),
 			...registerInsight((document) => this.types(document), this.root),
 			registerTypeFixes((document) => this.types(document)),
 			...registerRefactorings(root, project, (document, line) => this.scope(document, line))
 		];
-		vscode.workspace.textDocuments.forEach((document) => this.scheduleCheck(document));
 	}
 
 	public dispose(): void {
-		this.timers.forEach((timer) => clearTimeout(timer));
 		this.disposables.forEach((disposable) => disposable.dispose());
 	}
 
@@ -256,8 +244,9 @@ export class StrictLanguage implements vscode.Disposable {
 	private passing(root: string, document: vscode.TextDocument, method: StrictMethod, bodies: string[],
 		token?: vscode.CancellationToken): Promise<string[]> {
 		const source = document.getText();
-		const passing = sharedRun(this.runs, `${withImplementation(source, method, '')}\n${bodies.join('\n')}`,
-			() => token?.isCancellationRequested === true,
+		const compiler = path.join(root, compilerFile);
+		const key = `${compiler}:${fs.statSync(compiler).mtimeMs}:${document.fileName}:${method.line}:${source}:${bodies.join('\n')}`;
+		const passing = sharedRun(this.runs, key, () => token?.isCancellationRequested === true,
 			(isCancelled) => passingBodies(root, this.project(document.fileName), document.fileName, source, method, bodies,
 				isCancelled));
 		if (this.runs.size > cachedRuns) {
@@ -266,54 +255,10 @@ export class StrictLanguage implements vscode.Disposable {
 		return passing;
 	}
 
-	private scheduleCheck(document: vscode.TextDocument): void {
-		const key = document.uri.toString();
-		if (document.languageId === 'strict' && document.uri.scheme === 'file') {
-			clearTimeout(this.timers.get(key));
-			this.timers.set(key, setTimeout(() => void this.check(document), checkDelayMs));
-		}
-	}
-
-	/** Reports methods an existing method passes all tests of, verified like the suggestions, `strict check` reports copies. */
-	private async check(document: vscode.TextDocument): Promise<void> {
-		const root = this.root();
-		const version = document.version;
-		if (!root || document.isClosed) {
-			return;
-		}
-		const { own, types } = this.types(document);
-		const diagnostics: vscode.Diagnostic[] = [];
-		const checked = isEnabled('checkExistingMethods') ? own.methods : [];
-		for (const method of checked.filter((candidate) => isNamed(candidate.name) && candidate.name !== 'Run' &&
-			candidate.implementation.length > 0 && !pendingTests(candidate))) {
-			const calls = method.tests.length > 0 ? existingCalls(method, own, types).filter((existing) =>
-				existing.method.implementation.join('\n') !== method.implementation.join('\n')) : [];
-			const passing = calls.length > 0 ? await this.passing(root, document, method, calls.map((existing) => existing.call!)) : [];
-			const verified = calls.find((existing) => passing.includes(existing.call!));
-			const tests = method.tests.length === 1 ? 'the test' : `all ${method.tests.length} tests`;
-			if (verified) {
-				diagnostics.push(existingDiagnostic(method, verified.owner, verified.method,
-					`\`${verified.call}\` passes ${tests} of ${method.name}, use it instead`));
-			}
-		}
-		if (document.version === version && !document.isClosed) {
-			this.existing.set(document.uri, diagnostics);
-		}
-	}
 }
 
-function isEnabled(setting: 'suggestImplementations' | 'checkExistingMethods'): boolean {
+function isEnabled(setting: 'suggestImplementations'): boolean {
 	return vscode.workspace.getConfiguration('strict').get<boolean>(setting, true);
-}
-
-function existingDiagnostic(method: StrictMethod, owner: StrictType, existing: StrictMethod, detail: string): vscode.Diagnostic {
-	const diagnostic = new vscode.Diagnostic(new vscode.Range(method.line, 0, method.line, method.header.length),
-		`${owner.name}.${existing.name} already exists: ${detail}`, vscode.DiagnosticSeverity.Error);
-	diagnostic.code = alreadyExists;
-	diagnostic.source = 'strict';
-	diagnostic.relatedInformation = [new vscode.DiagnosticRelatedInformation(location(owner.file, existing.line),
-		`${owner.name}.${existing.header}`)];
-	return diagnostic;
 }
 
 function symbols(document: vscode.TextDocument): vscode.DocumentSymbol[] {

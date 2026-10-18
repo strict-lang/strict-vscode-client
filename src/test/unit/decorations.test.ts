@@ -1,7 +1,9 @@
 import * as assert from 'assert';
 import {
-	formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, LineCoverageMark, remember, slowestTests, TimingHistory
+	formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, lineCoverageMarks, LineCoverageMark, remember,
+	slowestTests, TimingHistory
 } from '../../scrunchModel';
+import { discoverStrictTests } from '../../scrunchDiscover';
 
 suite('decorations', () => {
 	test('coverage hover is duration, not a run-tests prompt', () => {
@@ -56,6 +58,19 @@ suite('decorations', () => {
 			'\tlet ended = packed.Fits(upcoming) is false');
 		assert.deepStrictEqual([value('false, true, true'), value('BlockGrid((0, 0, '.repeat(10))],
 			['7 times: false, true, true', `7 times: ${'BlockGrid((0, 0, '.repeat(10)}`.slice(0, 100) + '…']);
+	});
+	test('expression traces show constructor values and whether nested returns ran', () => {
+		assert.strictEqual(formatInlineValue({ file: 'AtlasRegion.strict', line: 15, hits: 13,
+			name: 'Size(metrics(6), metrics(7))', value: 'Size(Width = 140, Height = 140)' },
+			'\tSize(metrics(6), metrics(7))'), '13 times: Size(Width = 140, Height = 140)');
+		const methods = discoverStrictTests('Valid Boolean\n\tSample.Valid\n\tif width < 0\n\t\treturn false\n\ttrue');
+		const marks = lineCoverageMarks(methods, new Map([[1, { lineNumber: 1, state: 1, methodName: 'Valid' }]]), new Set(),
+			new Map(), new Map([[2, { file: 'Region.strict', line: 2, hits: 12 }]]));
+		const returned = marks.find((mark) => mark.lineNumber === 3)?.value;
+		assert.ok(returned);
+		assert.strictEqual(formatInlineValue(returned, '\t\treturn false'), '0 times');
+		assert.strictEqual(formatInlineValue({ file: 'Region.strict', line: 3, hits: 2, name: 'false', value: 'false' },
+			'\t\treturn false'), '2 times: false');
 	});
 
 	test('hover shows all values of a line, also those cut after it', () => {

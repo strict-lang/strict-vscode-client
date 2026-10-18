@@ -369,12 +369,12 @@
         "strict.suggestImplementations": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Suggest implementations from the tests of a method as ghost text, each one verified with `strict test` on a temporary copy of the file."
+          "markdownDescription": "Suggest implementations for the selected unfinished method as ghost text, each checked against its tests with `strict test`. Passing tests do not prove equivalence."
         },
         "strict.checkExistingMethods": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Report methods an existing method already does (`MethodAlreadyExists`), calls verified with `strict test` on a temporary copy of the file."
+          "markdownDescription": "Show duplicate method bodies (`MethodAlreadyExists`) reported by `strict check`. Does not search for alternatives by running tests."
         }
       }
     },

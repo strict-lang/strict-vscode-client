@@ -387,7 +387,8 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			output.appendLine(`Checking ${folder} failed with exit code ${result.exitCode}\n${result.output}`);
 			return;
 		}
-		const issues = checkIssues(result.output, project);
+		const issues = checkIssues(result.output, project).filter((issue) => issue.rule !== 'MethodAlreadyExists' ||
+			vscode.workspace.getConfiguration('strict').get<boolean>('checkExistingMethods', true));
 		const files = new Map([...this.files].filter((file) => normalizeFsPath(path.dirname(file)) === normalizeFsPath(folder)).
 			concat(issues.map((issue) => issue.file)).map((file) => [normalizeFsPath(file), file]));
 		for (const [key, file] of files) {
