@@ -386,8 +386,7 @@ export class ScrunchController implements Disposable {
 		this.refreshCoverage(uri);
 	}
 
-	// ponytail: asks git again for a new file outside the ignored folders, new ones while it runs share its call and miss a folder
-	// ignored after it started; upgrade: git check-ignore --stdin of a batch
+	// Concurrent new files share one git ignore check and may miss folders ignored after it starts.
 	/** Tests a changed file, asks git again for a new one, it can be in a folder ignored since (a worktree, new artifacts). */
 	private async onDiskChange(uri: Uri): Promise<void> {
 		const folder = workspace.getWorkspaceFolder(uri);
@@ -455,8 +454,7 @@ export class ScrunchController implements Disposable {
 		}
 	}
 
-	// ponytail: each publish is a result in Test Results (VS Code keeps 128, fixed), so while types are tested at most one per
-	// 3 s, once idle right away; upgrade: one run kept open while testing if 3 s still blinks too much
+	// VS Code retains only 128 test results. Publish at most every 3 s while testing, then immediately when idle.
 	private queuePublish(): void {
 		if (this.publishTimer && this.busyFiles > 0) {
 			return;

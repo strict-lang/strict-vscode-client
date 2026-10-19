@@ -35,8 +35,7 @@ export function registerNavigation(language: StrictLanguage): vscode.Disposable[
 					throw new Error(error);
 				}
 				const edit = new vscode.WorkspaceEdit();
-				// ponytail: types match by name, so files outside the workspace only mean a namesake there and stay; upgrade:
-				// resolve type names by package like Strict does
+				// Type names lack package identity; exclude external files to avoid renaming unrelated types.
 				const changes = renameEdits(target, name, references(target, sources(language), types)).filter((change) =>
 					editable(change.file, document));
 				for (const change of changes) {
@@ -131,8 +130,7 @@ function read(file: string): Source | undefined {
 	return text === undefined ? undefined : { file, text };
 }
 
-// ponytail: reads every indexed .strict file per request (open ones from memory), fine for some hundred files;
-// upgrade: keep the texts in the index of StrictLanguage by modification time
+// Reads indexed files per request; open documents use in-memory text.
 function sources(language: StrictLanguage): Source[] {
 	const files = [...language.allTypes().map((type) => type.file), ...vscode.workspace.textDocuments.filter((document) =>
 		document.languageId === 'strict' && document.uri.scheme === 'file').map((document) => document.fileName)];

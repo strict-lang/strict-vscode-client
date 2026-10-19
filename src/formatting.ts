@@ -15,7 +15,7 @@ export function indentUnit(lines: string[]): number {
 	return spaces.length > 0 ? Math.min(...spaces) : 4;
 }
 
-// ponytail: whitespace only, a range or an unparsable file stays like this; upgrade: `strict format` of a line range
+// Range formatting and unparsable files receive whitespace changes only.
 /** Lines first to last with tabs, without trailing whitespace, blank lines in methods or blank lines at the end of the
  * file (a final line break stays), whole files go through `strict format` afterwards (it drops space indentation). */
 export function formatted(source: string, first = 0, last = Number.MAX_SAFE_INTEGER): string {
@@ -30,8 +30,6 @@ export function formatted(source: string, first = 0, last = Number.MAX_SAFE_INTE
 		: [text.trim() ? withTabs(text, unit) : '']).join(lineEnding(source));
 }
 
-// ponytail: guards against strict builds before 184bf30a (they dropped words they couldn't parse), brackets inside texts are not
-// told apart; Strict now fails such lines itself
 /** What `strict format` printed without the line break ending the print, in the line endings of source, nothing when it
  * changed more than whitespace and brackets (it drops words of lines it can't parse). */
 export function printed(output: string, source: string): string | undefined {

@@ -13,8 +13,7 @@ export type Refactoring = { title: string; kind: 'RefactorExtract' | 'RefactorIn
 const textLiteral = /"(?:[^"\\]|\\.)*"/g;
 const ordinals = ['first', 'second', 'third', 'fourth'];
 
-// ponytail: text checks for a whole expression (a partial `a then b` passes), named after its type or `extracted` without a
-// rename afterwards; upgrade: Strict parses the selection, a snippet edit lets the user name it right away
+// Text checks can accept partial expressions. Extracted names come from the type or default to extracted.
 /** `let name = expression` above the line of the selected expression in a method body (a constant when it only uses literals,
  * constants and types), the selection becomes name. */
 export function extractToLet(lines: string[], line: number, start: number, end: number, scope: Scope): Refactoring | undefined {
@@ -118,7 +117,7 @@ function createdType(name: string, file: string, text: string, scope: Scope): Re
 		edits: [{ file: newFile, line: 0, character: 0, text: members.join('\n') }] }];
 }
 
-// ponytail: the first use of name on the line, also one inside a text; upgrade: positions of unknown names from Strict
+// Matches the first occurrence on the line, including occurrences inside strings.
 /** Arguments of the first call of name in text (on a value when isCalledOn) and what follows the call. */
 function usage(text: string, name: string, isCalledOn: boolean): { values: string[]; rest: string } | undefined {
 	const found = new RegExp(`${isCalledOn ? '\\.' : '(?<![\\w.])'}${name}(?!\\w)`).exec(text);

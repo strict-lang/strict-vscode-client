@@ -94,7 +94,7 @@ function entryAt(text: string, word: Word, scope: Scope, line: number): Entry | 
 			: named(membersOf({ type: scope.own }, scope.types))[0];
 	}
 	const receiver = resolve(chainBefore(text.slice(0, word.character - 1)), scope);
-	// ponytail: an unknown receiver (or one without that member) takes the only type having it; upgrade: types from Strict
+	// Unresolved members fall back to the only type that defines them.
 	const anywhere = () => named(scope.types.flatMap((type) => membersOf({ type }, [])));
 	const only = (entries: Entry[]) => entries.every((entry) => sameFile(entry.owner, entries[0].owner)) ? entries[0] : undefined;
 	return named(receiver ? membersOf(receiver, scope.types) : [])[0] ?? only(anywhere());

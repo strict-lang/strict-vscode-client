@@ -86,7 +86,7 @@ function fileLine(file: string, line: number): string {
 	}
 }
 
-// ponytail: cached per rule and Strict folder, the strict copy bundled in the .vsix has no Validators folder
+// Cache by rule and Strict folder; bundled compiler has no Validators sources.
 /** The line of the Validators of the Strict folder in use reporting rule, else the rules section of the Strict README. */
 function ruleTarget(rule: string, root: string | undefined): Uri {
 	const key = `${root}|${rule}`;

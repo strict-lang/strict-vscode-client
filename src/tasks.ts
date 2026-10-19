@@ -25,7 +25,6 @@ export function taskCommand(task: StrictTask, folder: string, workspaceFolders: 
 	};
 }
 
-// ponytail: reads every .strict file of the folder whenever the task list opens; upgrade: reuse the SCrunch discovery
 /** Test and check the folder, build the current file and run every program that needs no arguments. */
 export function detectedTasks(folder: string, current?: string): StrictTask[] {
 	const relative = current?.endsWith('.strict') ? path.relative(folder, current) : '..';

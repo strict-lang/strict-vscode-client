@@ -369,7 +369,7 @@
         "strict.suggestImplementations": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Suggest implementations for the selected unfinished method as ghost text, each checked against its tests with `strict test`. Passing tests do not prove equivalence."
+          "markdownDescription": "Suggest implementations for the selected unfinished method as ghost text. Uses `strict suggest` when available, otherwise `strict test`. Passing tests do not prove equivalence."
         },
         "strict.checkExistingMethods": {
           "type": "boolean",

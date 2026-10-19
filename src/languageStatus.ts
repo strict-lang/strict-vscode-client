@@ -8,7 +8,7 @@ const selectCommand = 'strict-vscode-client.selectRoot';
 /** Shows a rebuilt strict, NativeTester runs it before every test or check (cheap: compares the modification time). */
 export const refreshStatusCommand = 'strict-vscode-client.refreshStatus';
 
-// ponytail: refreshed when the editor or a setting changes, a rebuilt strict shows after the next switch; upgrade: watch it
+// Compiler version refreshes on editor or setting changes.
 /** `strict <version>` and the Strict folder in use for .strict files, an error without one, its link selects another. */
 export function registerLanguageStatus(root: () => string | undefined, candidates: () => string[], log: (line: string) => void):
 	vscode.Disposable {

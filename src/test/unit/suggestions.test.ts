@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { implementationCandidates, passingBodies } from '../../implementations';
+import { runStrict } from '../../nativeCompiler';
 import { findStrictRoot } from '../../paths';
 import { parseType } from '../../strictIndex';
 
@@ -21,7 +22,8 @@ suite('selected method suggestions', () => {
 				[own, parseType(numberFile, fs.readFileSync(numberFile, 'utf8'))]);
 			assert.ok(candidates.includes('number + number'), candidates.join('\n'));
 			assert.ok(!candidates.some((body) => /\.(Epsilon|E|Pi|Phi)\b/.test(body)), candidates.join('\n'));
-			const passing = await passingBodies(root, folder, file, source, own.methods[0], candidates);
+			const native = (await runStrict(root, ['help'])).output.includes('strict suggest ');
+			const passing = await passingBodies(root, folder, file, source, own.methods[0], native ? [] : candidates);
 			assert.ok(passing.includes('number + number'), passing.join('\n'));
 			assert.ok(!passing.includes('number'), passing.join('\n'));
 			assert.strictEqual(fs.readFileSync(file, 'utf8'), source);

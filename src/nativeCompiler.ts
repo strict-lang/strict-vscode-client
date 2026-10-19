@@ -206,7 +206,7 @@ export function lineValues(output: string, root: string): LineValue[] {
 	});
 }
 
-// ponytail: impact by type name mentions, over-approximates common names like Type, O(n²) on long chains; upgrade: dependencies from Strict
+// Type mentions approximate dependencies; common names add false matches, and long chains cost O(n²).
 export function dependents(changed: string, sources: Map<string, string>): string[] {
 	let remaining = [...sources].filter(([file]) => file !== changed);
 	const affected = [changed];

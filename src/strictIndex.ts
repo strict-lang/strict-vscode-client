@@ -210,9 +210,7 @@ function indexed(resolved: Resolved | undefined, call: string | undefined, types
 	return call && resolved ? resolved.element ? typeNamed(resolved.element, types) : undefined : resolved;
 }
 
-// ponytail: the value of a for loop is the element of a list or of the list a type has (Text has characters), X of its
-// `for Iterator(X)` (Range), else a type that has an iterator gives itself (`for 10`), Dictionary pairs and Enum values
-// stay unknown; upgrade: loop types from Strict's type inference
+// Infer loop values from list elements or iterator declarations. Dictionary pairs and enum values remain unknown.
 function iterated(resolved: Resolved | undefined, types: StrictType[]): Resolved | undefined {
 	const list = resolved?.element ? resolved : resolved?.type.members.map((member) => typeNamed(member.type, types))
 		.find((member) => member?.element);
@@ -242,8 +240,7 @@ function entries(type: StrictType): Entry[] {
 		...type.methods.filter((method) => isNamed(method.name)).map((method) => ({ owner: type, name: method.name, method }))];
 }
 
-// ponytail: like Strict's TypeShape.IsTrait no method has a body or is computed (`Area = Width * Height`), so native types
-// without Strict bodies (File) count as traits too; upgrade: the shapes of Strict
+// Bodyless native types also count as traits.
 export function isTrait(type: StrictType | undefined): boolean {
 	return type !== undefined && type.methods.length > 0 && type.methods.every((method) =>
 		method.tests.length + method.implementation.length === 0 && !/^[^\s(]+(\(.*\))? = /.test(method.header));

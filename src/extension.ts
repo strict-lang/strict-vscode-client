@@ -146,8 +146,7 @@ function runTask(definition: vscode.TaskDefinition, scope?: vscode.WorkspaceFold
 	return task;
 }
 
-// ponytail: VS Code starts no task process outside the user folder in a window without folders, this terminal passes no input
-// but Ctrl+C to file and links no files (VS Code resolves none in it); upgrade: stdin, registerTerminalLinkProvider
+// Folderless windows need a pseudoterminal. Only Ctrl+C input is supported; file links are unresolved.
 /** Terminal showing what file prints when run with args in cwd, it closes with the exit code, closing it stops file. */
 function processTerminal(file: string, args: string[], cwd: string): vscode.Pseudoterminal {
 	const write = new vscode.EventEmitter<string>();
@@ -188,8 +187,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		this.crashes.dispose();
 	}
 
-	// ponytail: an on demand file is only tested at start when its .strictbinary is newer (Strict prints its cached pass), a
-	// changed type it uses makes that a full run; upgrade: Strict tells whether its cache is still valid
+// On-demand files run at startup only when their bytecode is newer than their source. Dependencies can invalidate it.
 	public testAll(files: string[]): void {
 		files.forEach((file) => this.files.add(file));
 		const automatic = files.filter((file) => !this.isOnDemand(file) || isNewer(file.replace(/\.strict$/, '.strictbinary'), file));
@@ -257,8 +255,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		this.crashes.delete(vscode.Uri.file(file));
 	}
 
-	// ponytail: a frame of a type in another folder printed by its file name only is not found; upgrade: Strict prints the
-	// path relative to the project for every frame
+// Filename-only stack frames cannot resolve types in other folders without a project-relative path.
 	/** File of a stack frame Strict printed for the test of file: next to file, in its project or in the base types. */
 	public frameFile(printed: string, file: string): string {
 		const root = strictRoot();
@@ -369,8 +366,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		}
 	}
 
-	// ponytail: a traced VM run per visible file, cut after 20 s (it can run out of memory), a slower older run may replace
-	// newer values; upgrade: values with the normal test run once Strict makes tracing cheap
+// Trace visible files separately with a 20 s timeout. Older runs can overwrite newer values.
 	private async values(root: string, file: string): Promise<void> {
 		const project = projectOf(file);
 		const result = await runStrict(root, ['test', strictPath(project, file), rootArgument(project, root), 'values'],

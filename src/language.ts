@@ -58,7 +58,7 @@ export class StrictLanguage implements vscode.Disposable {
 		this.disposables.forEach((disposable) => disposable.dispose());
 	}
 
-	// ponytail: synchronous walk of the workspace and Strict folders, slow for huge workspaces; upgrade: workspace.findFiles
+	// Synchronous scans can block on large workspaces; use workspace.findFiles if needed.
 	public allTypes(): StrictType[] {
 		if (Date.now() - this.scanned > rescanMs) {
 			const root = this.root();
@@ -235,17 +235,17 @@ export class StrictLanguage implements vscode.Disposable {
 		if (!method || !pendingTests(method)) {
 			return [];
 		}
-		const passing = await this.passing(root, document, method, implementationCandidates(method, own, types), token);
+		const passing = await this.passing(root, document, method, () => implementationCandidates(method, own, types), token);
 		return token.isCancellationRequested ? [] : passing.map((body) =>
 			new vscode.InlineCompletionItem(`\t${body}`, new vscode.Range(position.line, 0, position.line, indent.length)));
 	}
 
 	/** Bodies passing all tests of method, cached while the rest of the file stays the same, see sharedRun. */
-	private passing(root: string, document: vscode.TextDocument, method: StrictMethod, bodies: string[],
+	private passing(root: string, document: vscode.TextDocument, method: StrictMethod, bodies: () => string[],
 		token?: vscode.CancellationToken): Promise<string[]> {
 		const source = document.getText();
 		const compiler = path.join(root, compilerFile);
-		const key = `${compiler}:${fs.statSync(compiler).mtimeMs}:${document.fileName}:${method.line}:${source}:${bodies.join('\n')}`;
+		const key = `${compiler}:${fs.statSync(compiler).mtimeMs}:${this.scanned}:${document.fileName}:${method.line}:${source}`;
 		const passing = sharedRun(this.runs, key, () => token?.isCancellationRequested === true,
 			(isCancelled) => passingBodies(root, this.project(document.fileName), document.fileName, source, method, bodies,
 				isCancelled));

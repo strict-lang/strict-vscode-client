@@ -94,8 +94,7 @@ function inferTests(body: DiscoveredTest[]): DiscoveredTest[] {
 	return tests;
 }
 
-// ponytail: Strict takes Boolean leading lines, without types a test is a line not starting with a member, parameter or
-// keyword (tests can not use them) and not using value or other; upgrade: the test lines from Strict
+// Without type inference, leading lines are classified by syntax; member, parameter and keyword starts are excluded.
 export function isTest(expression: string): boolean {
 	return !implementationStart.test(expression) && !/^(?!(not|true|false)\b)[a-z]/.test(expression) &&
 		!(memberIdentifier.test(expression) && !/\bis\b/.test(expression));

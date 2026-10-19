@@ -1,6 +1,8 @@
 import * as os from 'os';
+import * as fs from 'fs';
+import * as path from 'path';
 import { crashText, runStrict, StrictRun, testDuration, testResults } from './nativeCompiler';
-import { strictPath } from './paths';
+import { compilerFile, strictPath } from './paths';
 import { isTest } from './scrunchDiscover';
 import { isNamed, keywords, parseType, resolve, Resolved, Scope, StrictMethod, StrictType, typeNamed } from './strictIndex';
 
@@ -17,8 +19,9 @@ const minimumCopyTokens = 12;
 const maximumCandidates = 32;
 const parallelRuns = Math.max(1, Math.floor(os.cpus().length / 2));
 const normalizedBodies = new WeakMap<StrictMethod, { tokens: string; count: number; names: string[] }>();
+const suggestionCommands = new Map<string, Promise<boolean>>();
 
-// ponytail: exact token match with consistently renamed names, misses reordered or partly changed copies; upgrade: Strict compares syntax trees
+// Matches tokens with consistent renaming; reordered or partially changed copies do not match.
 export function copiedFrom(method: StrictMethod, own: StrictType, types: StrictType[]): ExistingCall | undefined {
 	const typeNames = new Set(types.map((type) => type.name));
 	const copy = normalized(method, typeNames);
@@ -70,8 +73,7 @@ function normalized(method: StrictMethod, typeNames: Set<string>): { tokens: str
 	return body;
 }
 
-// ponytail: test lines like scrunchDiscover finds them, a one-line body starting with a bracket using members like
-// `(id > 0) and (name is not "")` still reads as tests; upgrade: the test lines from Strict
+// Bracketed expressions using members can be mistaken for tests without compiler test-line metadata.
 /** All lines of a method without implementation yet are its tests, otherwise undefined. */
 export function pendingTests(method: StrictMethod): string[] | undefined {
 	const isPending = (line: string) => /^\t[^\t]/.test(line) && isTest(line.trim()) && !/\bthen\b/.test(line) &&
@@ -113,7 +115,7 @@ export function existingCalls(method: StrictMethod, own: StrictType, types: Stri
 		all.findIndex((other) => other.call === existing.call) === index);
 }
 
-// ponytail: follows type names mentioned in implementations, over-approximates calls; upgrade: call graph from Strict
+// Type mentions approximate dependencies and can include types that are never called.
 /** Whether existing reaches a type named name through the types its implementation uses, like a dispatcher does. */
 function usesType(existing: StrictMethod, name: string, byName: Map<string, StrictType>): boolean {
 	const seen = new Set<string>();
@@ -133,7 +135,7 @@ function usesType(existing: StrictMethod, name: string, byName: Map<string, Stri
 	return false;
 }
 
-// ponytail: one level of calls and binary operators over parameters and members, capped; upgrade: a `strict` search with type inference
+// Older compilers search one level of calls and binary operators over parameters and members.
 export function implementationCandidates(method: StrictMethod, own: StrictType, types: StrictType[]): string[] {
 	const values = valuesOf(method, own);
 	const returns = (candidate: StrictMethod) => sameType(candidate.returns, method.returns);
@@ -189,7 +191,7 @@ function normalizedType(typeText: string): string {
 		? normalizedType(generic[2]) + 's' : typeText.replace(/^.*\//, '');
 }
 
-// ponytail: drops one ending (Clamped, Rounds, Normalize), English only; upgrade: compare what methods do, not names
+// Strips one English suffix to match related method names.
 function stem(name: string): string {
 	return name.toLowerCase().replace(/ed$/, '').replace(/[eds]$/, '');
 }
@@ -280,23 +282,47 @@ export function passedAll(output: string, methodName: string, testCount: number)
 	return results.length === testCount && results.every((result) => result![1] === 'passed');
 }
 
-// ponytail: one strict process per body (40 ms each for small types); upgrade: verify all bodies in one strict process
-/** Bodies for method that pass all its tests on the Strict VM, in the order given, run in project like evaluate. */
+// Older compilers verify each candidate in a separate process.
+/** Native selected-method search when available, otherwise verify supplied candidates on the Strict VM. */
 export async function passingBodies(root: string, project: string, file: string, source: string, method: StrictMethod,
-	bodies: string[], isCancelled = () => false): Promise<string[]> {
+	bodies: string[] | (() => string[]), isCancelled = () => false): Promise<string[]> {
+	if (isCancelled()) {
+		return [];
+	}
+	const compiler = path.join(root, compilerFile);
+	const key = `${compiler}:${fs.statSync(compiler).mtimeMs}`;
+	let command = suggestionCommands.get(key);
+	if (!command) {
+		suggestionCommands.clear();
+		command = runStrict(root, ['help'], { cwd: project }).then((run) =>
+			run.exitCode === 0 && /^strict suggest /m.test(run.output));
+		suggestionCommands.set(key, command);
+	}
+	if (await command) {
+		if (isCancelled()) {
+			return [];
+		}
+		const run = await runStrict(root, ['suggest', strictPath(project, file), root.replace(/\\/g, '/'),
+			String(method.line + 1), '-'], { cwd: project, input: source });
+		if (run.exitCode !== 0) {
+			throw new Error(run.output.trim() || `Strict suggest failed with exit code ${run.exitCode}`);
+		}
+		return run.output.split(/\r?\n/).filter((line) => line.startsWith('Suggestion: ')).map((line) => line.slice(12));
+	}
+	const candidates = typeof bodies === 'function' ? bodies() : bodies;
 	const tests = pendingTests(method) ?? method.tests;
 	const passed = new Set<string>();
 	let next = 0;
-	await Promise.all(Array.from({ length: Math.min(parallelRuns, bodies.length) }, async () => {
-		while (next < bodies.length && !isCancelled()) {
-			const body = bodies[next++];
+	await Promise.all(Array.from({ length: Math.min(parallelRuns, candidates.length) }, async () => {
+		while (next < candidates.length && !isCancelled()) {
+			const body = candidates[next++];
 			if (passedAll((await testText(root, project, file, withImplementation(source, method, body, tests))).output,
 				method.name, tests.length)) {
 				passed.add(body);
 			}
 		}
 	}));
-	return bodies.filter((body) => passed.has(body));
+	return candidates.filter((body) => passed.has(body));
 }
 
 /** The run of key in runs for one more caller, started anew when there is none or every caller waiting for it is cancelled:

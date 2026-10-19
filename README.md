@@ -110,7 +110,8 @@ natively and shows only their own lines. Testing summary duration measures publi
 Task problem links can miss files outside task's workspace folder; terminal links resolve more locations.
 Suggestions try up to 32 one-level calls and operators for the selected unfinished method using `strict test`.
 Weak tests can accept wrong behavior; add distinguishing cases. Normal checks report duplicate bodies without searching
-for replacements by running tests. Native suggestion search is deferred until it can reuse compiled code.
+for replacements by running tests. Compilers providing `strict suggest` reuse compiled dependencies for the selected
+method; older compilers use separate `strict test` processes.
 
 ## Development
 

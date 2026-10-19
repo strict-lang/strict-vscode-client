@@ -92,8 +92,7 @@ export function fits(expression: string, expected: string | undefined, scope: Sc
 	return resolved !== undefined && sameType(typeText(resolved), expected!);
 }
 
-// ponytail: of several methods with enough parameters the one whose parameter has exactly the type of the literal, a number
-// for a Byte parameter gets no hint then; upgrade: overloads chosen by Strict's type inference
+// Ambiguous overloads require an exact literal type match; numeric literals do not match Byte parameters.
 function parameterName(methods: StrictMethod[], index: number, literalText: string, scope: Scope): string | undefined {
 	const parameters = methods.map((method) => method.parameters[index]);
 	const type = resolve(literalText, scope)?.type;

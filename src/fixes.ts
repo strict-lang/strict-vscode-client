@@ -122,8 +122,7 @@ function pluralRename(lines: string[], line: number, name: string): Fix | undefi
 		text: renamed })) };
 }
 
-// ponytail: whole words of this file outside of texts, other files using a renamed member or method keep the old name, a
-// keyword used as name is renamed where it is used as keyword too; upgrade: renames from Strict
+// Renames affect whole words outside strings in this file only. Keywords used as names also match keyword uses.
 /** Where the word name is renamed together with its occurrence on line: in its method when it is a parameter or local
  * there, else in the whole file. */
 export function renamedPositions(lines: string[], line: number, name: string): Array<[number, number]> {
@@ -198,7 +197,7 @@ function changes(rule: string, unknown: string, lines: string[], line: number, o
 	});
 }
 
-// ponytail: edit distance to every candidate, O(names * length²), fine for the few thousand names of a workspace
+// Edit distance costs O(names * length²).
 /** Up to 3 candidates closest to name ignoring case, differing in at most half of its characters. */
 function nearestNames(name: string, candidates: string[]): string[] {
 	const lower = name.toLowerCase();
