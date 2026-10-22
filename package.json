@@ -2,7 +2,7 @@
   "name": "strict-language",
   "displayName": "Strict Language",
   "description": "Language support for Strict: completion, hover, go to definition, implementations suggested from your tests, errors for methods that already exist, SCrunch inline tests, validator diagnostics, quick fixes and run commands, all through the native Strict compiler. See https://strict-lang.org/",
-  "version": "1.0.20261017",
+  "version": "1.0.20261022",
   "publisher": "strict-lang",
   "repository": {
     "type": "git",
@@ -92,6 +92,12 @@
         "command": "strict-vscode-client.getStarted",
         "title": "Get Started",
         "category": "Strict"
+      },
+      {
+        "command": "strict-vscode-client.buildPlatform",
+        "title": "Build for Platform...",
+        "category": "Strict",
+        "icon": "$(package)"
       }
     ],
     "walkthroughs": [
@@ -159,6 +165,11 @@
           "command": "strict-vscode-client.run",
           "when": "resourceLangId == strict",
           "group": "navigation@2"
+        },
+        {
+          "command": "strict-vscode-client.buildPlatform",
+          "when": "resourceLangId == strict",
+          "group": "navigation@3"
         }
       ],
       "editor/title": [
@@ -195,6 +206,11 @@
           "command": "strict-vscode-client.scrunch.focus",
           "when": "resourceLangId == strict",
           "group": "navigation@4"
+        },
+        {
+          "command": "strict-vscode-client.buildPlatform",
+          "when": "resourceLangId == strict",
+          "group": "strict@3"
         }
       ],
       "commandPalette": [
@@ -233,28 +249,37 @@
         {
           "command": "strict-vscode-client.evaluate",
           "when": "resourceLangId == strict && editorHasSelection"
+        },
+        {
+          "command": "strict-vscode-client.buildPlatform",
+          "when": "resourceLangId == strict || workspaceFolderCount > 0"
         }
       ],
       "explorer/context": [
         {
           "command": "strict-vscode-client.runFile",
-          "when": "resourceExtname == .strict",
+          "when": "resourceExtname == .strict || explorerResourceIsFolder",
           "group": "strict@1"
         },
         {
           "command": "strict-vscode-client.run",
-          "when": "resourceExtname == .strict",
+          "when": "resourceExtname == .strict || explorerResourceIsFolder",
           "group": "strict@2"
         },
         {
           "command": "strict-vscode-client.buildNative",
-          "when": "resourceExtname == .strict",
+          "when": "resourceExtname == .strict || explorerResourceIsFolder",
           "group": "strict@3"
         },
         {
           "command": "strict-vscode-client.updatePackages",
           "when": "explorerResourceIsFolder",
           "group": "strict@4"
+        },
+        {
+          "command": "strict-vscode-client.buildPlatform",
+          "when": "resourceExtname == .strict || explorerResourceIsFolder",
+          "group": "strict@3"
         }
       ]
     },
@@ -274,6 +299,11 @@
         "command": "strict-vscode-client.evaluate",
         "key": "shift+enter",
         "when": "editorTextFocus && resourceLangId == strict && editorHasSelection"
+      },
+      {
+        "command": "strict-vscode-client.runFile",
+        "key": "f5",
+        "when": "editorLangId == strict && !inDebugMode"
       }
     ],
     "taskDefinitions": [
@@ -351,15 +381,21 @@
         },
         "strict.onDemandFolders": {
           "type": "array",
-          "items": { "type": "string" },
-          "default": ["Compiler", "Bytecode", "Runtime"],
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "Compiler",
+            "Bytecode",
+            "Runtime"
+          ],
           "markdownDescription": "Types in folders of these names (at any depth) are slow to test, SCrunch tests them when you save them or run them in the Testing view, at start only when their cached result is newer than their file, not when a type they use changed."
         },
         "strict.slowTestMilliseconds": {
           "type": "number",
           "default": 20,
           "minimum": 0,
-          "markdownDescription": "Tests (and all tests of a method, on its header) and lines of a Run with Coverage taking at least this long show `slow: …` after the line and get the `slow` tag (filter the Testing view with `@strict.scrunch:slow`). Most types run all their tests in under 1 ms. **SCrunch: Show Slowest Tests** lists the slowest ones."
+          "markdownDescription": "Tests (and all tests of a method, on its header) and lines of a Run with Coverage taking at least this long show `slow: \u00e2\u20ac\u00a6` after the line and get the `slow` tag (filter the Testing view with `@strict.scrunch:slow`). Most types run all their tests in under 1 ms. **SCrunch: Show Slowest Tests** lists the slowest ones."
         },
         "strict.root": {
           "type": "string",

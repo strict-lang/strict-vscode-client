@@ -33,3 +33,15 @@ export function detectedTasks(folder: string, current?: string): StrictTask[] {
 		...strictFiles(folder).filter((file) => runMethods(fs.readFileSync(file, 'utf8')).some((method) => method.runnable))
 			.map((file) => ({ type: 'strict', file: path.relative(folder, file) }))];
 }
+
+export function runTargets(target: string): string[] {
+	if (!fs.existsSync(target)) { return []; }
+	if (!fs.statSync(target).isDirectory()) { return target.endsWith('.strict') ? [target] : []; }
+	const files = fs.readdirSync(target).filter((name) => name.endsWith('.strict')).map((name) => path.join(target, name))
+		.filter((file) => runMethods(fs.readFileSync(file, 'utf8')).length > 0);
+	const named = path.join(target, path.basename(target) + '.strict');
+	if (files.length) { return files.includes(named) ? [named] : files; }
+	return fs.readdirSync(target, { withFileTypes: true }).filter((entry) => entry.isDirectory() &&
+		/^[A-Z]/.test(entry.name) && !['Release', 'Debug', 'Tools'].includes(entry.name))
+		.flatMap((entry) => runTargets(path.join(target, entry.name)));
+}

@@ -10,15 +10,15 @@ import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
 import { StrictLanguage } from './language';
 import { refreshStatusCommand, registerLanguageStatus } from './languageStatus';
 import {
-	checkIssues, crashLine, crashText, dependents, isOnDemand, lineCounts, lineValues, runStrict, startProcess, stopProcess, testResults
+	checkIssues, crashLine, crashText, dependents, isOnDemand, lineCounts, lineValues, LineValue, runStrict, StrictRun, startProcess, stopProcess, testResults
 } from './nativeCompiler';
 import {
 	compilerFile, findStrictRoot, normalizeFsPath, projectFolder, resolveIn, rootArgument, strictNotFound, strictPath, strictRoots
 } from './paths';
-import { isStrictBinaryPath } from './scrunchCache';
+import { cachedInputs, failedInputs, isStrictBinaryPath } from './scrunchCache';
 import { discoverStrictTests } from './scrunchDiscover';
 import { registerScrunch, ScrunchController, ScrunchTester, testErrorSource } from './scrunch';
-import { detectedTasks, StrictTask, taskCommand } from './tasks';
+import { detectedTasks, runTargets, StrictTask, taskCommand } from './tasks';
 
 const notFound = `${strictNotFound} (restart VS Code after changing PATH), or set strict.root`;
 const parallelRuns = Math.max(1, os.cpus().length - 1);
@@ -30,7 +30,7 @@ export function activate(context: vscode.ExtensionContext): void {
 	extensionPath = context.extensionPath;
 	const decorations = new DecorationController(context.extensionPath);
 	registerDecorationLifecycle(context, decorations);
-	const tester = new NativeTester(() => scrunch);
+	const tester = new NativeTester(() => scrunch, context.workspaceState);
 	const scrunch = registerScrunch(decorations, tester, context.workspaceState);
 	if (!strictRoot()) {
 		output.appendLine(notFound);
@@ -70,6 +70,13 @@ export function activate(context: vscode.ExtensionContext): void {
 				scrunch.republish();
 			}
 		}),
+		vscode.commands.registerCommand('strict-vscode-client.buildPlatform', async (uri?: vscode.Uri) => {
+			const platforms = [{ label: 'Web', args: ['web'] },
+				...(process.platform === 'win32' ? [{ label: 'Windows', args: ['windows'] },
+					{ label: 'Windows + Linux', args: [] }] : [{ label: process.platform === 'darwin' ? 'macOS' : 'Linux', args: [] }])];
+			const selected = await vscode.window.showQuickPick(platforms, { title: 'Build for platform' });
+			if (selected) { await runFile(uri, selected.args, 'build'); }
+		}),
 		vscode.commands.registerCommand('strict-vscode-client.buildNative', (uri?: vscode.Uri) => runFile(uri, [], 'build')),
 		vscode.commands.registerCommand('strict-vscode-client.updatePackages', (uri?: vscode.Uri) => updatePackages(uri)),
 		vscode.commands.registerCommand('strict-vscode-client.getStarted', () =>
@@ -96,7 +103,15 @@ function projectOf(target: string): string {
 
 /** Runs the Run method of uri (or the current file) with args, or command (build) on it. */
 async function runFile(uri: vscode.Uri | undefined, args: string[], command?: string): Promise<void> {
-	const document = uri ? await vscode.workspace.openTextDocument(uri) : vscode.window.activeTextEditor?.document;
+	const editor = vscode.window.activeTextEditor?.document;
+	const target = uri?.fsPath ?? (editor?.languageId === 'strict' ? editor.uri.fsPath :
+		vscode.workspace.workspaceFolders?.[0]?.uri.fsPath);
+	const files = target ? runTargets(target) : [];
+	const selected = files.length > 1 ? await vscode.window.showQuickPick(files.map((file) =>
+		({ label: path.basename(file), description: vscode.workspace.asRelativePath(file), file })), { title: 'Choose Strict program' }) : undefined;
+	if (files.length > 1 && !selected) { return; }
+	const file = selected?.file ?? files[0];
+	const document = file ? await vscode.workspace.openTextDocument(vscode.Uri.file(file)) : undefined;
 	if (!document || document.languageId !== 'strict') {
 		void vscode.window.showErrorMessage('Open a .strict file to run.');
 		return;
@@ -178,11 +193,27 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	/** Files whose values were asked for since their last test. */
 	private readonly valued = new Set<string>();
 	private running = 0;
+	private revision = 0;
+	private readonly failedStamps = new Map<string, string>();
+	private readonly cache: Record<string, { stamp: string; run: StrictRun; values?: LineValue[] }>;
+	private saveTimer: ReturnType<typeof setTimeout> | undefined;
 
-	constructor(private readonly scrunch: () => ScrunchController) {}
+	constructor(private readonly scrunch: () => ScrunchController, private readonly memento: vscode.Memento) {
+		this.cache = memento.get('strict.testResults', {});
+	}
+	private failedStamp(root: string, project: string): string {
+		let stamp = this.failedStamps.get(project);
+		if (!stamp) { stamp = failedInputs(project, root); this.failedStamps.set(project, stamp); }
+		return stamp;
+	}
+	private saveCache(): void {
+		if (this.saveTimer) { clearTimeout(this.saveTimer); }
+		this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.memento.update('strict.testResults', this.cache); }, 500);
+	}
 
 	public dispose(): void {
 		this.aborts.forEach((abort) => abort.abort());
+		if (this.saveTimer) { clearTimeout(this.saveTimer); void this.memento.update('strict.testResults', this.cache); }
 		this.checks.dispose();
 		this.crashes.dispose();
 	}
@@ -191,7 +222,23 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	public testAll(files: string[]): void {
 		files.forEach((file) => this.files.add(file));
 		const automatic = files.filter((file) => !this.isOnDemand(file) || isNewer(file.replace(/\.strict$/, '.strictbinary'), file));
-		this.enqueue([...new Set(automatic.map((file) => path.dirname(file))), ...automatic]);
+		const root = strictRoot();
+		const stale = automatic.filter((file) => {
+			if (!root) { return true; }
+			let saved = this.cache[file];
+			const stamp = cachedInputs(file, projectOf(file), path.join(root, compilerFile));
+			if (stamp && (!saved || saved.stamp !== stamp)) {
+				saved = this.cache[file] = { stamp, run: { exitCode: 0, output: `All tests passed in ${file}\n`, durationMs: 0 } };
+				this.saveCache();
+			}
+			if (!saved || saved.stamp !== (saved.run.exitCode === 0 ? stamp : this.failedStamp(root, projectOf(file)))) { return true; }
+			const results = testResults(readText(file), vscode.Uri.file(file).toString(), saved.run).map((result) => ({ ...result, cached: true }));
+			this.scrunch().applyResults(file, results);
+			this.valued.add(file);
+			if (saved.values) { this.scrunch().applyValues(file, saved.values); }
+			return false;
+		});
+		this.enqueue([...new Set(stale.map((file) => path.dirname(file))), ...stale]);
 	}
 
 	private isOnDemand(file: string): boolean {
@@ -244,13 +291,16 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	}
 
 	public changed(file: string): void {
+		this.revision++; this.failedStamps.clear();
 		this.files.add(file);
 		const sources = new Map([...this.files].map((known) => [known, readText(known)]));
 		this.enqueue([file, path.dirname(file), ...dependents(file, sources).filter((other) => !this.isOnDemand(other))], true);
 	}
 
 	public deleted(file: string): void {
+		this.revision++; this.failedStamps.clear();
 		this.files.delete(file);
+		delete this.cache[file]; this.saveCache();
 		this.checks.delete(vscode.Uri.file(file));
 		this.crashes.delete(vscode.Uri.file(file));
 	}
@@ -314,6 +364,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	private async test(root: string, file: string, signal?: AbortSignal): Promise<void> {
 		this.scrunch().setBusy(file, true);
 		const withLines = this.withLines.delete(file);
+		const revision = this.revision;
 		const project = projectOf(file);
 		const lines = withLines ? [rootArgument(project, root), 'lines'] : [];
 		const result = await runStrict(root, ['test', strictPath(project, file), ...lines], { signal, cwd: project,
@@ -351,6 +402,9 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			this.scrunch().setProcessTime(file, result.durationMs, testsMs);
 		}
 		this.scrunch().applyResults(file, notifications, counts);
+		const stamp = result.exitCode === 0 ? cachedInputs(file, project, path.join(root, compilerFile))
+			: revision === this.revision && result.exitCode > 0 && !crash ? this.failedStamp(root, project) : undefined;
+		if (stamp) { this.cache[file] = { stamp, run: result }; this.saveCache(); } else { delete this.cache[file]; this.saveCache(); }
 		this.valued.delete(file);
 		this.showValues();
 	}
@@ -372,7 +426,12 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		const result = await runStrict(root, ['test', strictPath(project, file), rootArgument(project, root), 'values'],
 			{ cwd: project, timeoutMs: 20000 });
 		if (this.valued.has(file)) {
-			this.scrunch().applyValues(file, lineValues(result.output, project));
+			const values = lineValues(result.output, project);
+			this.scrunch().applyValues(file, values);
+			const saved = this.cache[file];
+			if (saved && saved.stamp === cachedInputs(file, project, path.join(root, compilerFile)) && result.exitCode === 0) {
+				saved.values = values; this.saveCache();
+			}
 		}
 	}
 

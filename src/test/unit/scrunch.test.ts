@@ -1,5 +1,8 @@
 import * as assert from 'assert';
-import { isStrictBinaryPath } from '../../scrunchCache';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { cachedInputs, failedInputs, isStrictBinaryPath } from '../../scrunchCache';
 import { discoverStrictTests, isRunnableHeader, typeNameFromPath } from '../../scrunchDiscover';
 import {
 	enrichNotification,
@@ -436,5 +439,37 @@ suite('scrunch cache', () => {
 		assert.strictEqual(isStrictBinaryPath('/tmp/Foo.STRICTBINARY'), true);
 		assert.strictEqual(isStrictBinaryPath('C:\\repo\\TextHelper.strict'), false);
 		assert.strictEqual(isStrictBinaryPath('C:\\repo\\strict-language-0.1.0.vsix'), false);
+	});
+});
+
+suite('persistent test inputs', () => {
+	test('native cache survives reopening and invalidates on dependency edits, deletion and corruption', () => {
+		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-cache-'));
+		try {
+			const file = path.join(folder, 'Game.strict'), dependency = path.join(folder, 'Scène.strict');
+			fs.writeFileSync(file, 'Run\n\t0'); fs.writeFileSync(dependency, 'has number');
+			const names = ['Game.strict', 'Scène.strict', 'Missing.strict'];
+			const table = [names.length, ...names.flatMap((name) => [[...name].length, ...[...name].map((character) => character.codePointAt(0)!)])];
+			const integers = [table.length, ...table, 4, ...names.map((name) => fs.existsSync(path.join(folder, name)) ? Math.floor(fs.statSync(path.join(folder, name)).mtimeMs) : 0)];
+			const data = Buffer.from(integers.flatMap((number) => {
+				const bytes = []; do { const digit = number % 128; number = Math.floor(number / 128); bytes.push(digit + (number ? 128 : 0)); } while (number);
+				return bytes;
+			}));
+			const header = Buffer.alloc(30); header.writeUInt32LE(0x04034b50); header.writeUInt32LE(data.length, 18); header.writeUInt16LE(7, 26);
+			fs.writeFileSync(file + 'binary', Buffer.concat([header, Buffer.from('sources'), data]));
+			fs.writeFileSync(path.join(folder, process.platform === 'win32' ? 'strict.exe' : 'strict'), 'compiler');
+			const failed = failedInputs(folder, folder);
+			assert.strictEqual(failedInputs(folder, folder), failed);
+			const first = cachedInputs(file, folder, file);
+			assert.ok(first);
+			assert.strictEqual(cachedInputs(file, folder, file), first);
+			fs.utimesSync(dependency, new Date(), new Date(Date.now() + 2000));
+			assert.notStrictEqual(failedInputs(folder, folder), failed);
+			assert.strictEqual(cachedInputs(file, folder, file), undefined);
+			fs.unlinkSync(dependency);
+			assert.strictEqual(cachedInputs(file, folder, file), undefined);
+			fs.writeFileSync(file + 'binary', 'broken');
+			assert.strictEqual(cachedInputs(file, folder, file), undefined);
+		} finally { fs.rmSync(folder, { recursive: true, force: true }); }
 	});
 });

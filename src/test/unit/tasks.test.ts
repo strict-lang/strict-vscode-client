@@ -2,9 +2,27 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { detectedTasks, runMethods, taskCommand } from '../../tasks';
+import { detectedTasks, runMethods, runTargets, taskCommand } from '../../tasks';
 
 suite('tasks', () => {
+
+	test('folder actions prefer its named program and otherwise offer runnable files', () => {
+		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-programs-'));
+		try {
+			const write = (name: string) => fs.writeFileSync(path.join(folder, name + '.strict'), 'Run\n\t0');
+			const games = path.join(folder, 'Games'), game = path.join(games, 'LogoApp');
+			fs.mkdirSync(game, { recursive: true });
+			fs.writeFileSync(path.join(game, 'LogoApp.strict'), 'Run\n\t0');
+			assert.deepStrictEqual(runTargets(games), [path.join(game, 'LogoApp.strict')]);
+			write('Other');
+			assert.deepStrictEqual(runTargets(folder), [path.join(folder, 'Other.strict')]);
+			write(path.basename(folder));
+			assert.deepStrictEqual(runTargets(folder), [path.join(folder, path.basename(folder) + '.strict')]);
+			assert.deepStrictEqual(runTargets(path.join(folder, 'Other.strict')), [path.join(folder, 'Other.strict')]);
+			assert.deepStrictEqual(runTargets(path.join(folder, 'missing')), []);
+		} finally { fs.rmSync(folder, { recursive: true, force: true }); }
+	});
+
 	let tempRoot: string;
 
 	setup(() => {

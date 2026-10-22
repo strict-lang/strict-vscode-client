@@ -9,16 +9,19 @@ Use `run` snippet for a program, or write a method header followed by its tests 
 
 | Action | Shortcut or command |
 | --- | --- |
-| Run current file | **Ctrl+Shift+R** (macOS **Cmd+Shift+R**) or editor play button |
+| Run current file | **F5**, **Ctrl+Shift+R** (macOS **Cmd+Shift+R**) or editor play button |
 | Run with arguments | **Strict: Run File with Arguments...** |
 | Build executable after testing | **Strict: Build Native Executable** or **Build Native** CodeLens |
+| Build for a platform | **Strict: Build for Platform...** (Windows, Windows + Linux, Web; native Linux/macOS on those hosts) |
 | Evaluate selection | **Shift+Enter** |
 | Quick fix | **Alt+Enter** or **Ctrl+.** |
 | Format document | **Shift+Alt+F** |
 | Show method in Testing | Editor beaker or **SCrunch: Show in Testing window** |
 | Refresh copied packages | **Strict: Update Packages** |
 
-Run, build and update also appear in Explorer context menu. Only `Run` methods can launch programs.
+Right-click a game folder or `.strict` file in Explorer for **Run File**, **Build Native Executable**, or **Build for Platform...**. Folders prefer their same-named program (e.g. `WebWars/WebWars.strict`); folders with several programs show a picker. F5 runs the current file without starting a debugger. Only `Run` methods can launch programs.
+
+SCrunch restores successful test results from valid `.strictbinary` source/data manifests and persists results and visible values across window reloads. Changed dependencies invalidate affected successful results. Failed results are also persisted; without a native success cache, their input check conservatively covers the project. **Time All Tests (without cache)** and explicit test runs still force a retest.
 
 ## Editing
 
