@@ -2,9 +2,24 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { detectedTasks, runMethods, runTargets, taskCommand } from '../../tasks';
+import { detectedTasks, nativeGame, runMethods, runTargets, taskCommand } from '../../tasks';
 
 suite('tasks', () => {
+	test('native game runs beside platform content; shared demos stay outside platform packages', () => {
+		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-native-game-'));
+		try {
+			const game = path.join(folder, 'WebWars.strict'), demo = path.join(folder, 'CombatDemo.strict');
+			assert.strictEqual(nativeGame(game), undefined);
+			fs.mkdirSync(path.join(folder, 'Content'));
+			if (process.platform !== 'win32') { assert.strictEqual(nativeGame(game), undefined); return; }
+			assert.deepStrictEqual(nativeGame(game), { file: path.join(folder, 'Release/Windows/WebWars.exe'),
+				cwd: path.join(folder, 'Release/Windows') });
+			fs.writeFileSync(path.join(folder, path.basename(folder) + '.strict'), 'Run\n\t0');
+			assert.deepStrictEqual(nativeGame(demo), { file: path.join(folder, 'Release/CombatDemo.exe'),
+				cwd: path.join(folder, 'Release') });
+		} finally { fs.rmSync(folder, { recursive: true, force: true }); }
+	});
+
 
 	test('folder actions prefer its named program and otherwise offer runnable files', () => {
 		const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'strict-programs-'));
@@ -14,6 +29,8 @@ suite('tasks', () => {
 			fs.mkdirSync(game, { recursive: true });
 			fs.writeFileSync(path.join(game, 'LogoApp.strict'), 'Run\n\t0');
 			assert.deepStrictEqual(runTargets(games), [path.join(game, 'LogoApp.strict')]);
+			fs.writeFileSync(path.join(game, 'LogoInput.strict'), 'Value Number\n\t1');
+			assert.deepStrictEqual(runTargets(path.join(game, 'LogoInput.strict')), [path.join(game, 'LogoApp.strict')]);
 			write('Other');
 			assert.deepStrictEqual(runTargets(folder), [path.join(folder, 'Other.strict')]);
 			write(path.basename(folder));

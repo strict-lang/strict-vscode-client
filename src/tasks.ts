@@ -36,7 +36,12 @@ export function detectedTasks(folder: string, current?: string): StrictTask[] {
 
 export function runTargets(target: string): string[] {
 	if (!fs.existsSync(target)) { return []; }
-	if (!fs.statSync(target).isDirectory()) { return target.endsWith('.strict') ? [target] : []; }
+	if (!fs.statSync(target).isDirectory()) {
+		if (!target.endsWith('.strict')) { return []; }
+		const named = path.join(path.dirname(target), path.basename(path.dirname(target)) + '.strict');
+		return runMethods(fs.readFileSync(target, 'utf8')).length === 0 && fs.existsSync(named)
+			&& runMethods(fs.readFileSync(named, 'utf8')).length > 0 ? [named] : [target];
+	}
 	const files = fs.readdirSync(target).filter((name) => name.endsWith('.strict')).map((name) => path.join(target, name))
 		.filter((file) => runMethods(fs.readFileSync(file, 'utf8')).length > 0);
 	const named = path.join(target, path.basename(target) + '.strict');
@@ -44,4 +49,13 @@ export function runTargets(target: string): string[] {
 	return fs.readdirSync(target, { withFileTypes: true }).filter((entry) => entry.isDirectory() &&
 		/^[A-Z]/.test(entry.name) && !['Release', 'Debug', 'Tools'].includes(entry.name))
 		.flatMap((entry) => runTargets(path.join(target, entry.name)));
+}
+
+/** Native games need their release working directory for relative Content paths. */
+export function nativeGame(file: string): { file: string; cwd: string } | undefined {
+	if (process.platform !== 'win32' || !fs.existsSync(path.join(path.dirname(file), 'Content'))) { return; }
+	const name = path.basename(file, '.strict'), parent = path.dirname(file);
+	const demo = name.endsWith('Demo') && fs.existsSync(path.join(parent, path.basename(parent) + '.strict'));
+	const cwd = path.join(parent, 'Release', ...(demo ? [] : ['Windows']));
+	return { file: path.join(cwd, name + '.exe'), cwd };
 }

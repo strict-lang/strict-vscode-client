@@ -18,7 +18,7 @@ import {
 import { cachedInputs, failedInputs, isStrictBinaryPath } from './scrunchCache';
 import { discoverStrictTests } from './scrunchDiscover';
 import { registerScrunch, ScrunchController, ScrunchTester, testErrorSource } from './scrunch';
-import { detectedTasks, runTargets, StrictTask, taskCommand } from './tasks';
+import { detectedTasks, nativeGame, runTargets, StrictTask, taskCommand } from './tasks';
 
 const notFound = `${strictNotFound} (restart VS Code after changing PATH), or set strict.root`;
 const parallelRuns = Math.max(1, os.cpus().length - 1);
@@ -152,9 +152,13 @@ function runTask(definition: vscode.TaskDefinition, scope?: vscode.WorkspaceFold
 	const folder = typeof scope === 'object' ? scope.uri.fsPath : vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 	const { name, args, cwd } = taskCommand(definition as StrictTask, folder ?? root, rootSearch()[1], root);
 	const strict = path.join(root, compilerFile);
-	const task = new vscode.Task(definition, scope ?? vscode.TaskScope.Workspace, name, 'strict',
-		vscode.workspace.workspaceFolders?.length ? new vscode.ProcessExecution(strict, args, { cwd })
-			: new vscode.CustomExecution(async () => processTerminal(strict, args, cwd)),
+	const source = path.resolve(folder ?? root, definition.file as string);
+	const game = !definition.command ? nativeGame(source) : undefined;
+	const execution = game ? new vscode.CustomExecution(async () => processTerminal(strict,
+		['build', strictPath(cwd, source)], cwd, { ...game, args: definition.args as string[] ?? [] }))
+		: vscode.workspace.workspaceFolders?.length ? new vscode.ProcessExecution(strict, args, { cwd })
+			: new vscode.CustomExecution(async () => processTerminal(strict, args, cwd));
+	const task = new vscode.Task(definition, scope ?? vscode.TaskScope.Workspace, name, 'strict', execution,
 		folder && normalizeFsPath(folder) === normalizeFsPath(cwd) ? '$strict' : []);
 	task.group = definition.command === 'test' ? vscode.TaskGroup.Test
 		: definition.command === 'build' ? vscode.TaskGroup.Build : undefined;
@@ -163,21 +167,25 @@ function runTask(definition: vscode.TaskDefinition, scope?: vscode.WorkspaceFold
 
 // Folderless windows need a pseudoterminal. Only Ctrl+C input is supported; file links are unresolved.
 /** Terminal showing what file prints when run with args in cwd, it closes with the exit code, closing it stops file. */
-function processTerminal(file: string, args: string[], cwd: string): vscode.Pseudoterminal {
+function processTerminal(file: string, args: string[], cwd: string,
+	next?: { file: string; args: string[]; cwd: string }): vscode.Pseudoterminal {
 	const write = new vscode.EventEmitter<string>();
 	const close = new vscode.EventEmitter<number>();
 	let child: ChildProcess | undefined;
-	const stop = () => child && stopProcess(child);
+	let stopped = false;
+	const stop = () => { stopped = true; if (child) { stopProcess(child); } };
+	const launch = (program: string, arguments_: string[], directory: string, follow?: typeof next) => {
+		child = startProcess(program, arguments_, directory);
+		const show = (text: string) => write.fire(text.replace(/\r?\n/g, '\r\n'));
+		child.stdout?.setEncoding('utf8').on('data', show);
+		child.stderr?.setEncoding('utf8').on('data', show);
+		child.on('error', (error) => show(`${error.message}\n`));
+		child.on('close', (code) => !stopped && code === 0 && follow
+			? launch(follow.file, follow.args, follow.cwd) : close.fire(code ?? 1));
+	};
 	return {
 		onDidWrite: write.event, onDidClose: close.event, close: stop, handleInput: (data) => data.includes('\x03') && stop(),
-		open: () => {
-			child = startProcess(file, args, cwd);
-			const show = (text: string) => write.fire(text.replace(/\r?\n/g, '\r\n'));
-			child.stdout?.setEncoding('utf8').on('data', show);
-			child.stderr?.setEncoding('utf8').on('data', show);
-			child.on('error', (error) => show(`${error.message}\n`));
-			child.on('close', (code) => close.fire(code ?? 1));
-		}
+		open: () => launch(file, args, cwd, next)
 	};
 }
 
