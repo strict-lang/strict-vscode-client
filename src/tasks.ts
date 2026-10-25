@@ -52,10 +52,11 @@ export function runTargets(target: string): string[] {
 }
 
 /** Native games need their release working directory for relative Content paths. */
-export function nativeGame(file: string): { file: string; cwd: string } | undefined {
+export function nativeGame(file: string, isDebug?: boolean): { file: string; cwd: string } | undefined {
 	if (process.platform !== 'win32' || !fs.existsSync(path.join(path.dirname(file), 'Content'))) { return; }
 	const name = path.basename(file, '.strict'), parent = path.dirname(file);
 	const demo = name.endsWith('Demo') && fs.existsSync(path.join(parent, path.basename(parent) + '.strict'));
-	const cwd = path.join(parent, 'Release', ...(demo ? [] : ['Windows']));
+	const subfolder = isDebug ? 'Debug' : 'Release';
+	const cwd = path.join(parent, subfolder, ...(demo ? [] : ['Windows']));
 	return { file: path.join(cwd, name + '.exe'), cwd };
 }

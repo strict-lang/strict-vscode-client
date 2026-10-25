@@ -153,9 +153,11 @@ function runTask(definition: vscode.TaskDefinition, scope?: vscode.WorkspaceFold
 	const { name, args, cwd } = taskCommand(definition as StrictTask, folder ?? root, rootSearch()[1], root);
 	const strict = path.join(root, compilerFile);
 	const source = path.resolve(folder ?? root, definition.file as string);
-	const game = !definition.command ? nativeGame(source) : undefined;
+	const isDebug = !definition.command || (definition.args as string[] | undefined)?.includes('debug');
+	const game = !definition.command ? nativeGame(source, isDebug) : undefined;
+	const buildArgs = ['build', strictPath(cwd, source), ...(isDebug ? ['debug'] : [])];
 	const execution = game ? new vscode.CustomExecution(async () => processTerminal(strict,
-		['build', strictPath(cwd, source)], cwd, { ...game, args: definition.args as string[] ?? [] }))
+		buildArgs, cwd, { ...game, args: definition.args as string[] ?? [] }))
 		: vscode.workspace.workspaceFolders?.length ? new vscode.ProcessExecution(strict, args, { cwd })
 			: new vscode.CustomExecution(async () => processTerminal(strict, args, cwd));
 	const task = new vscode.Task(definition, scope ?? vscode.TaskScope.Workspace, name, 'strict', execution,
