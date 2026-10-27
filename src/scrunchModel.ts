@@ -1,5 +1,5 @@
 import { LineCount, LineValue } from './nativeCompiler';
-import { DiscoveredMethod, DiscoveredTest } from './scrunchDiscover';
+import { DiscoveredMethod, DiscoveredTest, isSlowHeader } from './scrunchDiscover';
 import { formatDuration, parseDiscrepancy, parseStackFrames, TestRunnerNotification } from './testResults';
 
 export type LineCoverageMark = {
@@ -30,7 +30,7 @@ export function visibleMethods(methods: DiscoveredMethod[]): DiscoveredMethod[] 
 }
 
 export function isManualMethod(method: DiscoveredMethod): boolean {
-	return method.tests.length === 0 && method.runnable;
+	return isSlowHeader(method.header) || method.tests.length === 0 && method.runnable;
 }
 
 export function shouldExecuteManual(method: DiscoveredMethod, requestedExplicitly: boolean): boolean {

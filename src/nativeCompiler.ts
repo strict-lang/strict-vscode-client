@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { compilerFile, normalizeFsPath } from './paths';
-import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
+import { discoverStrictTests, isSlowHeader, typeNameFromPath } from './scrunchDiscover';
 import { TestRunnerNotification } from './testResults';
 
 export type StrictRun = { exitCode: number; output: string; durationMs: number };
@@ -66,7 +66,7 @@ export function runProcess(file: string, args: string[], cwd: string, options: R
 			stopProcess(child);
 		};
 		const timeout = options.timeoutMs ?? defaultTimeoutMs;
-		const timer = setTimeout(() => stop(`Timed out after ${timeout / 1000} s`), timeout);
+		const timer = timeout > 0 ? setTimeout(() => stop(`Timed out after ${timeout / 1000} s`), timeout) : undefined;
 		const aborted = () => stop('Stopped');
 		options.signal?.addEventListener('abort', aborted, { once: true });
 		if (options.signal?.aborted) {
@@ -89,8 +89,8 @@ export function runProcess(file: string, args: string[], cwd: string, options: R
 
 /** file started in cwd below normal priority (many tests at once must not slow VS Code) as the leader of the processes it
  * starts (elsewhere than Windows), for stopProcess. */
-export function startProcess(file: string, args: string[], cwd: string): ChildProcess {
-	const child = spawn(file, args, { cwd, windowsHide: true, detached: process.platform !== 'win32' });
+export function startProcess(file: string, args: string[], cwd: string, env?: Record<string, string>): ChildProcess {
+	const child = spawn(file, args, { cwd, env: { ...process.env, ...env }, windowsHide: true, detached: process.platform !== 'win32' });
 	try {
 		if (child.pid !== undefined) {
 			os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
@@ -164,7 +164,8 @@ export function testResults(source: string, uri: string, run: StrictRun): TestRu
 		};
 	};
 	const reported = new Set<typeof printed[number]>();
-	const methods = discoverStrictTests(source);
+	const methods = discoverStrictTests(source).filter((method) => !isSlowHeader(method.header) ||
+		printed.some((test) => test.method === method.name));
 	const discovered = methods.flatMap((method) => method.tests.flatMap((test) => {
 		const found = printed.find((candidate) => candidate.line !== undefined ? candidate.line === test.lineNumber
 			: candidate.expression === test.expression && candidate.method === method.name);

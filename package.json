@@ -301,6 +301,11 @@
         "when": "editorTextFocus && resourceLangId == strict && editorHasSelection"
       },
       {
+        "command": "strict-vscode-client.buildNative",
+        "key": "f7",
+        "when": "editorLangId == strict"
+      },
+      {
         "command": "strict-vscode-client.runFile",
         "key": "f5",
         "when": "editorLangId == strict && !inDebugMode"
@@ -401,6 +406,16 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Strict folder containing `strict.exe` and the base `.strict` types. Empty = the newest `strict` of the workspace or a sibling `Strict` repository, else the first on PATH, else the copy bundled in the .vsix."
+        },
+        "strict.androidNdkPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Android NDK folder used by **Build for platform > Android** (passed as `ANDROID_NDK_ROOT`). Empty = use the environment variable."
+        },
+        "strict.androidSdkPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Android SDK folder used by **Build for platform > Android** (passed as `ANDROID_HOME`). Empty = use the environment variable."
         },
         "strict.suggestImplementations": {
           "type": "boolean",

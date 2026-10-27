@@ -29,7 +29,7 @@ export function cachedInputs(file: string, cwd: string, compiler: string): strin
 		}
 		if (scale !== 1) { return undefined; }
 		const start = 1 + integers[0], count = integers[1];
-		if (!count || integers[start] !== 4 || integers.length !== start + 1 + count) { return undefined; }
+		if (!count || integers[start] !== 6 || integers.length !== start + 1 + count) { return undefined; }
 		let position = 2;
 		for (let index = 0; index < count; index++) {
 			const length = integers[position++];

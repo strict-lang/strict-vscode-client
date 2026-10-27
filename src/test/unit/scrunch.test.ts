@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { parseType, typeNamed } from '../../strictIndex';
 import { cachedInputs, failedInputs, isStrictBinaryPath } from '../../scrunchCache';
 import { discoverStrictTests, isRunnableHeader, typeNameFromPath } from '../../scrunchDiscover';
 import {
@@ -132,6 +133,18 @@ suite('scrunch discover', () => {
 		assert.deepStrictEqual(visibleMethods(methods).map((method) => method.name), ['Run', 'Greet']);
 		assert.strictEqual(methods.find((method) => method.name === 'Run')?.runnable, true);
 		assert.strictEqual(methods.find((method) => method.name === 'Greet')?.runnable, true);
+	});
+
+	test('Slow return types are transparent and their tests require an explicit run', () => {
+		const [method] = discoverStrictTests('Merged Slow(Numbers)\n\tDemo.Merged.First is 1\n\t(1, 2)');
+		assert.strictEqual(isManualMethod(method), true);
+		assert.strictEqual(method.runnable, true);
+		assert.strictEqual(shouldExecuteManual(method, false), false);
+		assert.strictEqual(shouldExecuteManual(method, true), true);
+		const number = parseType('Number.strict', 'has number');
+		const list = parseType('List.strict', 'has elements');
+		assert.strictEqual(typeNamed('Slow(Numbers)', [number, list])?.type, list);
+		assert.strictEqual(isRunnableHeader('Run() Slow(Number)'), true);
 	});
 
 	test('isRunnableHeader treats missing or defaulted parameters as runnable', () => {
@@ -450,7 +463,7 @@ suite('persistent test inputs', () => {
 			fs.writeFileSync(file, 'Run\n\t0'); fs.writeFileSync(dependency, 'has number');
 			const names = ['Game.strict', 'Scène.strict', 'Missing.strict'];
 			const table = [names.length, ...names.flatMap((name) => [[...name].length, ...[...name].map((character) => character.codePointAt(0)!)])];
-			const integers = [table.length, ...table, 4, ...names.map((name) => fs.existsSync(path.join(folder, name)) ? Math.floor(fs.statSync(path.join(folder, name)).mtimeMs) : 0)];
+			const integers = [table.length, ...table, 6, ...names.map((name) => fs.existsSync(path.join(folder, name)) ? Math.floor(fs.statSync(path.join(folder, name)).mtimeMs) : 0)];
 			const data = Buffer.from(integers.flatMap((number) => {
 				const bytes = []; do { const digit = number % 128; number = Math.floor(number / 128); bytes.push(digit + (number ? 128 : 0)); } while (number);
 				return bytes;

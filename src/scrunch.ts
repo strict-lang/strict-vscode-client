@@ -634,7 +634,10 @@ export class ScrunchController implements Disposable {
 		const cancelled = token.onCancellationRequested(() => abort.abort());
 		this.userRunDepth += 1;
 		try {
-			const tested = items.filter((item) => this.methodOfItem(item)?.tests.length);
+			const tested = items.filter((item) => {
+				const method = this.methodOfItem(item);
+				return method && method.tests.length > 0 && !isManualMethod(method);
+			});
 			tested.forEach((item) => run.started(item));
 			const files = [...new Set(tested.map((item) => item.uri!.fsPath))];
 			const isCoverage = request.profile?.kind === TestRunProfileKind.Coverage;
@@ -685,11 +688,13 @@ export class ScrunchController implements Disposable {
 			run.skipped(item);
 			return;
 		}
-		if (method.tests.length > 0) {
+		if (method.tests.length > 0 && !isManualMethod(method)) {
 			this.reportItem(run, uri, item, method);
 			return;
 		}
-		const explicit = request.include?.some((included) => included.id === item.id) ?? false;
+		const included = request.include?.length === 1 ? request.include[0] : undefined;
+		const explicit = included !== undefined && (included.id === item.id ||
+			included.uri?.fsPath === uri.fsPath && !this.methodOfItem(included));
 		if (!shouldExecuteManual(method, explicit)) {
 			run.skipped(item);
 			return;

@@ -17,6 +17,11 @@ const adder = [
 ].join('\n');
 
 suite('native compiler', () => {
+	test('explicit functional runs can disable the automatic timeout', async () => {
+		const result = await runProcess(process.execPath, ['-e', 'setTimeout(() => {}, 25)'], os.tmpdir(), { timeoutMs: 0 });
+		assert.strictEqual(result.exitCode, 0, result.output);
+	});
+
 	test('started processes run below normal priority so many tests at once keep VS Code responsive', () => {
 		const child = startProcess(process.execPath, ['-e', 'setTimeout(() => {}, 5000)'], os.tmpdir());
 		try {

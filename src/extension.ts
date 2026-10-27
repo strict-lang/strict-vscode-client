@@ -16,14 +16,15 @@ import {
 	compilerFile, findStrictRoot, normalizeFsPath, projectFolder, resolveIn, rootArgument, strictNotFound, strictPath, strictRoots
 } from './paths';
 import { cachedInputs, failedInputs, isStrictBinaryPath } from './scrunchCache';
-import { discoverStrictTests } from './scrunchDiscover';
+import { discoverStrictTests, isSlowHeader } from './scrunchDiscover';
 import { registerScrunch, ScrunchController, ScrunchTester, testErrorSource } from './scrunch';
 import { detectedTasks, nativeGame, runTargets, StrictTask, taskCommand } from './tasks';
 
 const notFound = `${strictNotFound} (restart VS Code after changing PATH), or set strict.root`;
-const parallelRuns = Math.max(1, os.cpus().length - 1);
+const parallelRuns = Math.max(1, Math.floor(os.cpus().length / 2));
 let output: vscode.OutputChannel;
 let extensionPath: string;
+const builds = new Map<vscode.TaskExecution, () => void>();
 
 export function activate(context: vscode.ExtensionContext): void {
 	output = vscode.window.createOutputChannel('Strict');
@@ -63,6 +64,13 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand(showResultCommand, (uri: string, lineNumber: number) =>
 			scrunch.showResult(uri, lineNumber)),
 		vscode.window.onDidChangeVisibleTextEditors(() => tester.showValues()),
+		vscode.tasks.onDidStartTask((event) => {
+			if (event.execution.task.definition.command === 'build') { builds.set(event.execution, tester.hold()); }
+		}),
+		vscode.tasks.onDidEndTask((event) => {
+			builds.get(event.execution)?.();
+			builds.delete(event.execution);
+		}),
 		vscode.workspace.onDidChangeConfiguration((event) => {
 			if (event.affectsConfiguration('strict.root')) {
 				void scrunch.discoverWorkspace();
@@ -71,7 +79,7 @@ export function activate(context: vscode.ExtensionContext): void {
 			}
 		}),
 		vscode.commands.registerCommand('strict-vscode-client.buildPlatform', async (uri?: vscode.Uri) => {
-			const platforms = [{ label: 'Web', args: ['web'] },
+			const platforms = [{ label: 'Web', args: ['web'] }, { label: 'Android', args: ['android'] },
 				...(process.platform === 'win32' ? [{ label: 'Windows', args: ['windows'] },
 					{ label: 'Windows + Linux', args: [] }] : [{ label: process.platform === 'darwin' ? 'macOS' : 'Linux', args: [] }])];
 			const selected = await vscode.window.showQuickPick(platforms, { title: 'Build for platform' });
@@ -158,8 +166,8 @@ function runTask(definition: vscode.TaskDefinition, scope?: vscode.WorkspaceFold
 	const buildArgs = ['build', strictPath(cwd, source), ...(isDebug ? ['debug'] : [])];
 	const execution = game ? new vscode.CustomExecution(async () => processTerminal(strict,
 		buildArgs, cwd, { ...game, args: definition.args as string[] ?? [] }))
-		: vscode.workspace.workspaceFolders?.length ? new vscode.ProcessExecution(strict, args, { cwd })
-			: new vscode.CustomExecution(async () => processTerminal(strict, args, cwd));
+		: vscode.workspace.workspaceFolders?.length ? new vscode.ProcessExecution(strict, args, { cwd, env: androidEnvironment() })
+			: new vscode.CustomExecution(async () => processTerminal(strict, args, cwd, undefined, androidEnvironment()));
 	const task = new vscode.Task(definition, scope ?? vscode.TaskScope.Workspace, name, 'strict', execution,
 		folder && normalizeFsPath(folder) === normalizeFsPath(cwd) ? '$strict' : []);
 	task.group = definition.command === 'test' ? vscode.TaskGroup.Test
@@ -167,17 +175,26 @@ function runTask(definition: vscode.TaskDefinition, scope?: vscode.WorkspaceFold
 	return task;
 }
 
+/** strict.androidNdkPath and strict.androidSdkPath as the variables the Android build reads, when set. */
+function androidEnvironment(): Record<string, string> {
+	const settings = vscode.workspace.getConfiguration('strict');
+	const ndk = settings.get<string>('androidNdkPath');
+	const sdk = settings.get<string>('androidSdkPath');
+	return { ...(ndk ? { ANDROID_NDK_ROOT: ndk, ANDROID_NDK_HOME: ndk } : {}),
+		...(sdk ? { ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdk } : {}) };
+}
+
 // Folderless windows need a pseudoterminal. Only Ctrl+C input is supported; file links are unresolved.
 /** Terminal showing what file prints when run with args in cwd, it closes with the exit code, closing it stops file. */
 function processTerminal(file: string, args: string[], cwd: string,
-	next?: { file: string; args: string[]; cwd: string }): vscode.Pseudoterminal {
+	next?: { file: string; args: string[]; cwd: string }, env?: Record<string, string>): vscode.Pseudoterminal {
 	const write = new vscode.EventEmitter<string>();
 	const close = new vscode.EventEmitter<number>();
 	let child: ChildProcess | undefined;
 	let stopped = false;
 	const stop = () => { stopped = true; if (child) { stopProcess(child); } };
 	const launch = (program: string, arguments_: string[], directory: string, follow?: typeof next) => {
-		child = startProcess(program, arguments_, directory);
+		child = startProcess(program, arguments_, directory, follow ? undefined : env);
 		const show = (text: string) => write.fire(text.replace(/\r?\n/g, '\r\n'));
 		child.stdout?.setEncoding('utf8').on('data', show);
 		child.stderr?.setEncoding('utf8').on('data', show);
@@ -203,6 +220,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	/** Files whose values were asked for since their last test. */
 	private readonly valued = new Set<string>();
 	private running = 0;
+	private holds = 0;
 	private revision = 0;
 	private readonly failedStamps = new Map<string, string>();
 	private readonly cache: Record<string, { stamp: string; run: StrictRun; values?: LineValue[] }>;
@@ -324,17 +342,39 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 
 	public async run(uri: vscode.Uri, methodName: string, signal?: AbortSignal): Promise<void> {
 		const root = strictRoot();
-		if (!root || methodName !== 'Run') {
-			throw new Error(root ? 'strict only runs Run methods' : notFound);
+		const source = readText(uri.fsPath);
+		const method = discoverStrictTests(source).find((item) => item.name === methodName);
+		if (!root || !method || methodName !== 'Run' && !isSlowHeader(method.header)) {
+			throw new Error(root ? 'Select one Run or Slow method' : notFound);
 		}
 		const project = projectOf(uri.fsPath);
-		const result = await runStrict(root, [strictPath(project, uri.fsPath)], { signal, cwd: project });
-		const method = discoverStrictTests(readText(uri.fsPath)).find((item) => item.name === methodName);
+		const file = strictPath(project, uri.fsPath);
+		const args = methodName === 'Run' ? [file] : ['test', file, rootArgument(project, root), methodName];
+		const result = await runStrict(root, args, { signal, cwd: project, timeoutMs: 0 });
+		for (const notification of testResults(source, uri.toString(), result)) {
+			this.scrunch().applyResult(notification);
+		}
 		this.scrunch().applyResult({
-			lineNumber: method?.lineNumber ?? 0, state: result.exitCode === 0 ? 1 : 0, uri: uri.toString(), methodName,
+			lineNumber: method.lineNumber, state: result.exitCode === 0 ? 1 : 0, uri: uri.toString(), methodName,
 			consoleOutput: result.output, durationMs: result.durationMs,
 			message: result.exitCode === 0 ? undefined : `Exit code ${result.exitCode}`
 		});
+	}
+
+	/** Stops running tests and starts none until the returned function is called (a build replaces files tests use, which
+	 * crashed them with exit code 127 and slowed both down). Interrupted files are tested again afterwards. */
+	public hold(): () => void {
+		const interrupted = [...this.aborts.keys()];
+		this.holds++;
+		this.aborts.forEach((abort) => abort.abort());
+		let released = false;
+		return () => {
+			if (released) { return; }
+			released = true;
+			this.holds--;
+			this.enqueue(interrupted);
+			this.showValues();
+		};
 	}
 
 	private enqueue(entries: string[], first = false): void {
@@ -351,7 +391,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	private next(): void {
 		const root = strictRoot();
 		void vscode.commands.executeCommand(refreshStatusCommand);
-		while (root && this.running < parallelRuns && this.queue.size > 0) {
+		while (root && !this.holds && this.running < parallelRuns && this.queue.size > 0) {
 			const entry = this.queue.values().next().value as string;
 			this.queue.delete(entry);
 			this.running++;
@@ -377,7 +417,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		const revision = this.revision;
 		const project = projectOf(file);
 		const lines = withLines ? [rootArgument(project, root), 'lines'] : [];
-		const result = await runStrict(root, ['test', strictPath(project, file), ...lines], { signal, cwd: project,
+		const result = await runStrict(root, ['test', strictPath(project, file), ...lines, 'unit'], { signal, cwd: project,
 			timeoutMs: vscode.workspace.getConfiguration('strict').get<number>('timeoutSeconds', 60) * 1000 });
 		this.scrunch().setBusy(file, false);
 		if (!this.files.has(file) || signal?.aborted) {
@@ -423,7 +463,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	public showValues(): void {
 		const root = strictRoot();
 		for (const file of new Set(vscode.window.visibleTextEditors.map((editor) => editor.document.uri.fsPath))) {
-			if (root && this.files.has(file) && !this.valued.has(file)) {
+			if (root && !this.holds && this.files.has(file) && !this.valued.has(file)) {
 				this.valued.add(file);
 				void this.values(root, file);
 			}
@@ -433,7 +473,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 // Trace visible files separately with a 20 s timeout. Older runs can overwrite newer values.
 	private async values(root: string, file: string): Promise<void> {
 		const project = projectOf(file);
-		const result = await runStrict(root, ['test', strictPath(project, file), rootArgument(project, root), 'values'],
+		const result = await runStrict(root, ['test', strictPath(project, file), rootArgument(project, root), 'values', 'unit'],
 			{ cwd: project, timeoutMs: 20000 });
 		if (this.valued.has(file)) {
 			const values = lineValues(result.output, project);

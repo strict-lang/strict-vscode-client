@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
+import { closingBracket, discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
+export { closingBracket } from './scrunchDiscover';
 
 export type StrictParameter = { name: string; type: string; optional: boolean };
 export type StrictMember = { name: string; type: string; line: number; text: string };
@@ -71,20 +72,6 @@ export function valueType(value: string, members: StrictMember[]): string {
 		members.find((member) => member.name === value)?.type ?? '';
 }
 
-/** Index of the bracket closing the one text starts with, brackets in texts are skipped. */
-export function closingBracket(text: string): number {
-	let depth = 0;
-	let inText = false;
-	for (let index = 0; index < text.length; index++) {
-		inText = text[index] === '"' ? !inText : inText;
-		depth += inText ? 0 : text[index] === '(' ? 1 : text[index] === ')' ? -1 : 0;
-		if (depth === 0) {
-			return index;
-		}
-	}
-	return text.length;
-}
-
 export function splitArguments(text: string): string[] {
 	const parts = [''];
 	let depth = 0;
@@ -105,7 +92,7 @@ export function splitArguments(text: string): string[] {
 export function typeNamed(typeText: string, types: StrictType[]): Resolved | undefined {
 	const generic = /^([\w/]+)\((.+)\)$/.exec(typeText);
 	const base = (generic?.[1] ?? typeText).replace(/^.*\//, '');
-	if (base === 'Mutable' && generic) {
+	if ((base === 'Mutable' || base === 'Slow') && generic) {
 		return typeNamed(generic[2], types);
 	}
 	const type = types.find((candidate) => candidate.name === base);

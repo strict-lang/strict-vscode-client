@@ -63,16 +63,31 @@ export function discoverStrictTests(source: string): DiscoveredMethod[] {
 }
 
 export function isRunnableHeader(header: string): boolean {
-	const open = header.indexOf('(');
-	if (open < 0) {
+	const rest = header.slice(methodName(header).length);
+	if (!rest.startsWith('(')) {
 		return true;
 	}
-	const close = header.lastIndexOf(')');
-	const inside = header.slice(open + 1, close >= 0 ? close : undefined).trim();
-	if (inside.length === 0) {
-		return true;
+	const inside = rest.slice(1, closingBracket(rest)).trim();
+	return inside.length === 0 || inside.split(',').every((part) => part.includes('='));
+}
+
+export function isSlowHeader(header: string): boolean {
+	const rest = header.slice(methodName(header).length);
+	return (rest.startsWith('(') ? rest.slice(closingBracket(rest) + 1) : rest).trimStart().startsWith('Slow(');
+}
+
+/** Index of the bracket closing the one text starts with, brackets in texts are skipped. */
+export function closingBracket(text: string): number {
+	let depth = 0;
+	let inText = false;
+	for (let index = 0; index < text.length; index++) {
+		inText = text[index] === '"' ? !inText : inText;
+		depth += inText ? 0 : text[index] === '(' ? 1 : text[index] === ')' ? -1 : 0;
+		if (depth === 0) {
+			return index;
+		}
 	}
-	return inside.split(',').every((part) => part.includes('='));
+	return text.length;
 }
 
 function methodName(header: string): string {
