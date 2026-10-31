@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import {
-	formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, lineCoverageMarks, LineCoverageMark, remember,
-	slowestTests, TimingHistory
+	formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, isSlow, lineCoverageMarks, LineCoverageMark,
+	remember, slowestTests, TimingHistory
 } from '../../scrunchModel';
 import { discoverStrictTests } from '../../scrunchDiscover';
 
@@ -82,6 +82,13 @@ suite('decorations', () => {
 	test('slow marker tells the time before a slowdown', () => {
 		assert.strictEqual(formatInlineSlow({ lineNumber: 2, failed: false, kind: 'coverage',
 			tests: [{ lineNumber: 2, state: 1 }], durationMs: 238, previousMs: 12 }, 10), 'slow: 238ms (was 12ms)');
+	});
+
+	test('a cached result is never slow, its remembered time is from an earlier run like a busy startup', () => {
+		const cached = { lineNumber: 2, state: 1, durationMs: 238, cached: true };
+		assert.strictEqual(formatInlineSlow({ lineNumber: 2, failed: false, kind: 'test', tests: [cached], durationMs: 238 }, 10),
+			undefined);
+		assert.deepStrictEqual([isSlow(cached, 10), isSlow({ ...cached, cached: undefined }, 10)], [false, true]);
 	});
 
 	test('remember gives a cached pass its last time and marks a run more than twice as slow from the threshold on', () => {

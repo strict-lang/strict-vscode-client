@@ -38,6 +38,7 @@ import {
 	enrichNotification,
 	groupByMethod,
 	isManualMethod,
+	isSlow,
 	lineBelongsTo,
 	lineCoverageMarks,
 	methodForLine,
@@ -184,7 +185,7 @@ export class ScrunchController implements Disposable {
 	private updateStatus(): void {
 		const all = [...this.results.values()].flatMap((byLine) => [...byLine.values()]).filter((result) => result.expression);
 		const failed = all.filter((result) => result.state === 0).length;
-		const slow = all.filter((result) => (result.durationMs ?? 0) >= slowTestMilliseconds()).length;
+		const slow = all.filter((result) => isSlow(result, slowTestMilliseconds())).length;
 		this.status.text = `${this.busyFiles > 0 ? '$(sync~spin)' : '$(beaker)'} ${all.length - failed}` +
 			`${failed > 0 ? ` $(error) ${failed}` : ''}${slow > 0 ? ` $(watch) ${slow}` : ''}`;
 		this.status.tooltip = new MarkdownString(`SCrunch: ${all.length - failed} tests passed, ${failed} failed, ${slow} slow ` +
@@ -520,8 +521,8 @@ export class ScrunchController implements Disposable {
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
 		this.appendMethodOutput(run, methodItem, summary,
 			unprintedOutput(methodOutput(summary), keyOf(uri), printed, this.where(uri)));
-		methodItem.tags = isManualMethod(method) ? [this.manualTag] : (durationMs ?? 0) >= slowTestMilliseconds()
-			? [this.slowTag] : [];
+		methodItem.tags = isManualMethod(method) ? [this.manualTag] : isSlow({ durationMs, cached: summary.cached },
+			slowTestMilliseconds()) ? [this.slowTag] : [];
 		if (summary.failed) {
 			run.failed(methodItem, summary.messages.filter((item) => item.state === 0).map((item) => this.toMessage(uri, item)),
 				durationMs);

@@ -188,8 +188,13 @@ export function formatInlineSlow(mark: LineCoverageMark, slowMs: number): string
 		mark.tests.some((test) => test.lineNumber === mark.lineNumber);
 	const before = mark.previousMs === undefined ? '' : ` (was ${formatDuration(mark.previousMs)})`;
 	const executed = mark.count ? ` (self ${formatDuration(mark.count.selfMs)}, ${times(mark.count.executions)})` : '';
-	return isTimed && !mark.failed && (mark.durationMs ?? 0) >= slowMs ? `slow: ${formatDuration(mark.durationMs)}${before}${executed}`
-		: undefined;
+	return isTimed && !mark.failed && isSlow({ durationMs: mark.durationMs, cached: mark.tests.some((test) => test.cached) }, slowMs)
+		? `slow: ${formatDuration(mark.durationMs)}${before}${executed}` : undefined;
+}
+
+/** A cached result did not run now, its remembered time may be from a busy startup and is not shown as slow. */
+export function isSlow(result: Pick<TestRunnerNotification, 'durationMs' | 'cached'>, slowMs: number): boolean {
+	return !result.cached && (result.durationMs ?? 0) >= slowMs;
 }
 
 /** Hit counts and compiler values, with compact results for returns and constructors and per-hit values when they vary. */
