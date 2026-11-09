@@ -25,6 +25,12 @@ const issuePattern = /^(.+?\.strict):line (\d+): (\w+): (.*)$/;
 const errorLocation = /^\w+: .* in (.+?\.strict):(\d+)/m;
 export const testDuration = / \((\d+(?:\.\d+)?) ms\)$/;
 
+/** How many `strict test` processes run at once: configured (0 is half the cores) while VS Code is focused, else one, so
+ * changes made elsewhere (agents, git) do not take over the computer. */
+export function testProcesses(focused: boolean, configured: number, cores: number): number {
+	return !focused ? 1 : configured > 0 ? configured : Math.max(1, Math.floor(cores / 2));
+}
+
 /** Runs root/strict in options.cwd, the project folder of the file it gets (see projectFolder), else in root. */
 export function runStrict(root: string, args: string[], options: RunOptions = {}): Promise<StrictRun> {
 	return runProcess(path.join(root, compilerFile), args, options.cwd ?? root, options);

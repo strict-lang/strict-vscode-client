@@ -384,6 +384,12 @@
           "minimum": 1,
           "markdownDescription": "SCrunch stops `strict test` of a type after this many seconds (long trainings on the Strict VM need more)."
         },
+        "strict.parallelTests": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "How many `strict test` processes SCrunch runs at once while VS Code is focused, `0` is half the CPU cores. In the background (another app focused, files changed by agents or git) it runs one at a time and traces no values until VS Code is focused again."
+        },
         "strict.onDemandFolders": {
           "type": "array",
           "items": {

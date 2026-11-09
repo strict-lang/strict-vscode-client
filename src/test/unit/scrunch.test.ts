@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { parseType, typeNamed } from '../../strictIndex';
-import { cachedInputs, failedInputs, isStrictBinaryPath } from '../../scrunchCache';
+import { cachedInputs, failedInputs, isStrictBinaryPath, strictBinaryPath } from '../../scrunchCache';
 import { discoverStrictTests, isRunnableHeader, typeNameFromPath } from '../../scrunchDiscover';
 import {
 	enrichNotification,
@@ -453,6 +453,10 @@ suite('scrunch cache', () => {
 		assert.strictEqual(isStrictBinaryPath('C:\\repo\\TextHelper.strict'), false);
 		assert.strictEqual(isStrictBinaryPath('C:\\repo\\strict-language-0.1.0.vsix'), false);
 	});
+	test('strictBinaryPath is in obj next to the source', () => {
+		assert.strictEqual(strictBinaryPath(path.join('repo', 'Math', 'Vector2.strict')),
+			path.join('repo', 'Math', 'obj', 'Vector2.strictbinary'));
+	});
 });
 
 suite('persistent test inputs', () => {
@@ -469,7 +473,8 @@ suite('persistent test inputs', () => {
 				return bytes;
 			}));
 			const header = Buffer.alloc(30); header.writeUInt32LE(0x04034b50); header.writeUInt32LE(data.length, 18); header.writeUInt16LE(7, 26);
-			fs.writeFileSync(file + 'binary', Buffer.concat([header, Buffer.from('sources'), data]));
+			fs.mkdirSync(path.join(folder, 'obj'));
+			fs.writeFileSync(strictBinaryPath(file), Buffer.concat([header, Buffer.from('sources'), data]));
 			fs.writeFileSync(path.join(folder, process.platform === 'win32' ? 'strict.exe' : 'strict'), 'compiler');
 			const failed = failedInputs(folder, folder);
 			assert.strictEqual(failedInputs(folder, folder), failed);
@@ -481,7 +486,7 @@ suite('persistent test inputs', () => {
 			assert.strictEqual(cachedInputs(file, folder, file), undefined);
 			fs.unlinkSync(dependency);
 			assert.strictEqual(cachedInputs(file, folder, file), undefined);
-			fs.writeFileSync(file + 'binary', 'broken');
+			fs.writeFileSync(strictBinaryPath(file), 'broken');
 			assert.strictEqual(cachedInputs(file, folder, file), undefined);
 		} finally { fs.rmSync(folder, { recursive: true, force: true }); }
 	});

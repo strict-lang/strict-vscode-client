@@ -2,6 +2,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { createHash } from 'crypto';
 
+/** The bytecode cache Strict writes for a source file: obj/Name.strictbinary next to it. */
+export function strictBinaryPath(file: string): string {
+	return path.join(path.dirname(file), 'obj', path.basename(file).replace(/\.strict$/, '.strictbinary'));
+}
+
 export function isStrictBinaryPath(filePath: string): boolean {
 	return filePath.toLowerCase().endsWith('.strictbinary');
 }
@@ -10,7 +15,7 @@ export function isStrictBinaryPath(filePath: string): boolean {
 export function cachedInputs(file: string, cwd: string, compiler: string): string | undefined {
 	let descriptor: number | undefined;
 	try {
-		descriptor = fs.openSync(file.replace(/\.strict$/, '.strictbinary'), 'r');
+		descriptor = fs.openSync(strictBinaryPath(file), 'r');
 		const header = Buffer.alloc(30);
 		if (fs.readSync(descriptor, header, 0, 30, 0) !== 30 || header.readUInt32LE(0) !== 0x04034b50 ||
 			header.readUInt16LE(8) !== 0 || (header.readUInt16LE(6) & 8)) { return undefined; }

@@ -10,18 +10,18 @@ import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
 import { StrictLanguage } from './language';
 import { refreshStatusCommand, registerLanguageStatus } from './languageStatus';
 import {
-	checkIssues, crashLine, crashText, dependents, isOnDemand, lineCounts, lineValues, LineValue, runStrict, StrictRun, startProcess, stopProcess, testResults
+	checkIssues, crashLine, crashText, dependents, isOnDemand, lineCounts, lineValues, LineValue, runStrict, StrictRun, startProcess, stopProcess, testProcesses,
+	testResults
 } from './nativeCompiler';
 import {
 	compilerFile, findStrictRoot, normalizeFsPath, projectFolder, resolveIn, rootArgument, strictNotFound, strictPath, strictRoots
 } from './paths';
-import { cachedInputs, failedInputs, isStrictBinaryPath } from './scrunchCache';
+import { cachedInputs, failedInputs, isStrictBinaryPath, strictBinaryPath } from './scrunchCache';
 import { discoverStrictTests, isSlowHeader } from './scrunchDiscover';
 import { registerScrunch, ScrunchController, ScrunchTester, testErrorSource } from './scrunch';
 import { detectedTasks, nativeGame, runTargets, StrictTask, taskCommand } from './tasks';
 
 const notFound = `${strictNotFound} (restart VS Code after changing PATH), or set strict.root`;
-const parallelRuns = Math.max(1, Math.floor(os.cpus().length / 2));
 let output: vscode.OutputChannel;
 let extensionPath: string;
 const builds = new Map<vscode.TaskExecution, () => void>();
@@ -64,6 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand(showResultCommand, (uri: string, lineNumber: number) =>
 			scrunch.showResult(uri, lineNumber)),
 		vscode.window.onDidChangeVisibleTextEditors(() => tester.showValues()),
+		vscode.window.onDidChangeWindowState((state) => state.focused && tester.resume()),
 		vscode.tasks.onDidStartTask((event) => {
 			if (event.execution.task.definition.command === 'build') { builds.set(event.execution, tester.hold()); }
 		}),
@@ -249,7 +250,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 // On-demand files run at startup only when their bytecode is newer than their source. Dependencies can invalidate it.
 	public testAll(files: string[]): void {
 		files.forEach((file) => this.files.add(file));
-		const automatic = files.filter((file) => !this.isOnDemand(file) || isNewer(file.replace(/\.strict$/, '.strictbinary'), file));
+		const automatic = files.filter((file) => !this.isOnDemand(file) || isNewer(strictBinaryPath(file), file));
 		const root = strictRoot();
 		const stale = automatic.filter((file) => {
 			if (!root) { return true; }
@@ -311,7 +312,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			if (withLines) {
 				this.withLines.add(file);
 			}
-			fs.rmSync(file.replace(/\.strict$/, '.strictbinary'), { force: true });
+			fs.rmSync(strictBinaryPath(file), { force: true });
 		});
 		this.enqueue(files, true);
 		await done;
@@ -361,6 +362,12 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		});
 	}
 
+	/** Starts the tests and value traces that waited while VS Code was in the background. */
+	public resume(): void {
+		this.next();
+		this.showValues();
+	}
+
 	/** Stops running tests and starts none until the returned function is called (a build replaces files tests use, which
 	 * crashed them with exit code 127 and slowed both down). Interrupted files are tested again afterwards. */
 	public hold(): () => void {
@@ -391,7 +398,9 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	private next(): void {
 		const root = strictRoot();
 		void vscode.commands.executeCommand(refreshStatusCommand);
-		while (root && !this.holds && this.running < parallelRuns && this.queue.size > 0) {
+		const slots = testProcesses(vscode.window.state.focused,
+			vscode.workspace.getConfiguration('strict').get<number>('parallelTests', 0), os.cpus().length);
+		while (root && !this.holds && this.running < slots && this.queue.size > 0) {
 			const entry = this.queue.values().next().value as string;
 			this.queue.delete(entry);
 			this.running++;
@@ -462,6 +471,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	/** Hit counts and assigned values of the lines of each visible tested file, once per test of it. */
 	public showValues(): void {
 		const root = strictRoot();
+		if (!vscode.window.state.focused) { return; }
 		for (const file of new Set(vscode.window.visibleTextEditors.map((editor) => editor.document.uri.fsPath))) {
 			if (root && !this.holds && this.files.has(file) && !this.valued.has(file)) {
 				this.valued.add(file);

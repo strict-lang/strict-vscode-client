@@ -6,6 +6,7 @@ import {
 	callers, calls, Hit, implementationsOf, nameError, references, renameEdits, Source, Target, targetAt, typeAt
 } from './navigationModel';
 import { normalizeFsPath, strictDocumentSelector } from './paths';
+import { strictBinaryPath } from './scrunchCache';
 import { typeNameFromPath } from './scrunchDiscover';
 import { keywords, StrictMethod } from './strictIndex';
 
@@ -45,7 +46,7 @@ export function registerNavigation(language: StrictLanguage): vscode.Disposable[
 				if (target.isType) {
 					const file = target.owner.file;
 					edit.renameFile(vscode.Uri.file(file), vscode.Uri.file(path.join(path.dirname(file), `${name}.strict`)));
-					edit.deleteFile(vscode.Uri.file(file.replace(/\.strict$/, '.strictbinary')), { ignoreIfNotExists: true });
+					edit.deleteFile(vscode.Uri.file(strictBinaryPath(file)), { ignoreIfNotExists: true });
 				}
 				return edit;
 			}

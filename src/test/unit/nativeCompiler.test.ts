@@ -4,7 +4,7 @@ import * as os from 'os';
 import * as path from 'path';
 import {
 	checkIssues, crashLine, crashText, dependents, gitIgnored, isOnDemand, lineCounts, lineValues, runProcess, startProcess, stopProcess,
-	testResults
+	testProcesses, testResults
 } from '../../nativeCompiler';
 import { isIgnoredBy } from '../../paths';
 
@@ -208,6 +208,11 @@ suite('native compiler', () => {
 			exitCode: -1, durationMs: 60000, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\nTimed out after 60 s'
 		});
 		assert.strictEqual(results[1].message, 'Timed out after 60 s in Adder.Add(2, 2) is 4 (line 4), later tests did not run');
+	});
+
+	test('testProcesses use the configured count or half the cores while focused, one in the background', () => {
+		assert.deepStrictEqual([testProcesses(true, 0, 16), testProcesses(true, 3, 16), testProcesses(true, 0, 1),
+			testProcesses(false, 3, 16)], [8, 3, 1, 1]);
 	});
 
 	test('a file in an on demand folder at any depth is only tested on demand', () => {
