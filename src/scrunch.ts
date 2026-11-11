@@ -24,14 +24,13 @@ import {
 	TestRunRequest,
 	TestTag,
 	tests,
-	TextEditorSelectionChangeKind,
 	Uri,
 	window,
 	workspace
 } from 'vscode';
 import * as path from 'path';
 import { afterTyping, DecorationController, slowTestMilliseconds } from './decorations';
-import { gitIgnored, LineCount, LineValue } from './nativeCompiler';
+import { gitIgnored, LineCount, LineValue, Problem } from './nativeCompiler';
 import { isIgnoredBy, normalizeFsPath } from './paths';
 import { discoverStrictTests, DiscoveredMethod, typeNameFromPath } from './scrunchDiscover';
 import {
@@ -41,7 +40,6 @@ import {
 	isSlow,
 	lineBelongsTo,
 	lineCoverageMarks,
-	methodForLine,
 	methodOf,
 	MethodSummary,
 	remember,
@@ -140,12 +138,6 @@ export class ScrunchController implements Disposable {
 				}
 			}
 		}));
-		this.disposables.push(window.onDidChangeTextEditorSelection((event) => {
-			if (event.kind === TextEditorSelectionChangeKind.Command) {
-				void this.onRevealedFromTesting(event.textEditor.document.uri,
-					event.selections[0]?.active.line);
-			}
-		}));
 		void this.discoverWorkspace();
 	}
 
@@ -202,6 +194,13 @@ export class ScrunchController implements Disposable {
 	public republish(): void {
 		this.published.clear();
 		this.queuePublish();
+	}
+
+	/** Every failed test of the last runs with its file and line. */
+	public failedTests(): Problem[] {
+		return [...this.results.values()].flatMap((byLine) => [...byLine.values()]).filter((result) => result.state === 0 && result.uri)
+			.map((result) => ({ file: Uri.parse(result.uri!).fsPath, line: result.lineNumber, message: result.message ?? 'failed',
+				kind: 'test' as const }));
 	}
 
 	/** Results of one `strict test` of file replace its earlier test results (results of Run programs stay), the remembered
@@ -464,6 +463,8 @@ export class ScrunchController implements Disposable {
 		this.publishTimer = setTimeout(() => afterTyping('publish', () => this.publishAll()), this.busyFiles > 0 ? 3000 : 40);
 	}
 
+	/** The results of the visible files, all only once Strict is idle: each publish is a new entry in Test Results, every few
+	 * seconds one for files nobody looks at made it flicker. Only the output of the visible files goes into it. */
 	private publishAll(): void {
 		this.publishTimer = undefined;
 		this.updateStatus();
@@ -474,10 +475,12 @@ export class ScrunchController implements Disposable {
 		// One run: VS Code gives every item of a result a state per run, a run per type made each full publish cost 250 MB
 		let run: TestRun | undefined;
 		const printed = new Set<string>();
+		const shown = new Set(window.visibleTextEditors.map((editor) => keyOf(editor.document.uri)));
 		for (const key of this.methods.keys()) {
 			const fileItem = this.findFileItem(Uri.file(key));
 			const fingerprint = this.fingerprint(key);
-			if (!fileItem?.uri || !this.results.get(key)?.size || this.published.get(key) === fingerprint) {
+			if (!fileItem?.uri || !this.results.get(key)?.size || this.published.get(key) === fingerprint ||
+				this.busyFiles > 0 && !shown.has(key)) {
 				continue;
 			}
 			this.published.set(key, fingerprint);
@@ -491,11 +494,11 @@ export class ScrunchController implements Disposable {
 			for (const method of visible) {
 				const summary = grouped.get(method.header);
 				if (summary) {
-					this.publishMethod(run, uri, this.ensureMethodItem(uri, method), method, summary, printed);
+					this.publishMethod(run, uri, this.ensureMethodItem(uri, method), method, summary, shown.has(key) ? printed : undefined);
 				}
 			}
 			const time = this.processTimes.get(key);
-			if (time && time.processMs - time.testsMs >= 100) {
+			if (time && time.processMs - time.testsMs >= 100 && shown.has(key)) {
 				run.appendOutput(`${fileItem.label}: strict test took ${formatDuration(time.processMs)}, its tests ${formatDuration(time.testsMs)}\r\n`);
 			}
 		}
@@ -506,21 +509,21 @@ export class ScrunchController implements Disposable {
 		return publishFingerprint(this.results.get(key)) + (this.findFileItem(Uri.file(key))?.error ?? '');
 	}
 
-	/** Publishes the result of method, its output unless printed has it, see unprintedOutput. */
+	/** Publishes the result of method, its output unless printed has it (see unprintedOutput) or there is no printed. */
 	private publishMethod(
 		run: TestRun,
 		uri: Uri,
 		methodItem: TestItem,
 		method: DiscoveredMethod,
 		summary: MethodSummary,
-		printed: Set<string>
+		printed?: Set<string>
 	): void {
 		methodItem.description = summary.failed
 			? formatErrorSummary(summary.messages.find((item) => item.state === 0)?.message)
 			: summary.cached ? 'cached' : undefined;
 		const durationMs = summary.hasDuration ? summary.duration : undefined;
 		this.appendMethodOutput(run, methodItem, summary,
-			unprintedOutput(methodOutput(summary), keyOf(uri), printed, this.where(uri)));
+			printed && unprintedOutput(methodOutput(summary), keyOf(uri), printed, this.where(uri)));
 		methodItem.tags = isManualMethod(method) ? [this.manualTag] : isSlow({ durationMs, cached: summary.cached },
 			slowTestMilliseconds()) ? [this.slowTag] : [];
 		if (summary.failed) {
@@ -786,22 +789,6 @@ export class ScrunchController implements Disposable {
 			return;
 		}
 		run.passed(item, durationMs);
-	}
-
-	private async onRevealedFromTesting(uri: Uri, lineNumber: number | undefined): Promise<void> {
-		if (lineNumber === undefined || !uri.fsPath.toLowerCase().endsWith('.strict')) {
-			return;
-		}
-		const method = methodForLine(this.methodsFor(uri), lineNumber);
-		if (!method) {
-			return;
-		}
-		const onMethodOrTest = lineNumber === method.lineNumber ||
-			method.tests.some((test) => test.lineNumber === lineNumber);
-		if (!onMethodOrTest) {
-			return;
-		}
-		await commands.executeCommand('workbench.panel.testResults.view.focus');
 	}
 
 	private itemAt(uri: Uri, lineNumber: number): TestItem | undefined {

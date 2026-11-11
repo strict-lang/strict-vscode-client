@@ -20,9 +20,11 @@ const builtLine = /^Built .+\.test(\.exe)?$/;
 const lineCount = /^Line (.+?\.strict):(\d+) executed (\d+) times in (\d+(?:\.\d+)?) ms \(self (-?\d+(?:\.\d+)?) ms\)$/;
 const valueLine = /^Value (.+?\.strict):line (\d+) hit (\d+) times(?:(, each: (.*))|: (.+?) = (.*))?$/;
 const testLine = /^Test (passed|failed): (.*) in (\S+?)(?: at .+:line (\d+))?$/;
-const stackLine = /^\s+at .+ in .+:line \d+$/;
+const stackLine = /^\s+(at .+ in .+:line \d+|\.\.\. \(skipped \d+ lines\))$/;
 const issuePattern = /^(.+?\.strict):line (\d+): (\w+): (.*)$/;
-const errorLocation = /^\w+: .* in (.+?\.strict):(\d+)/m;
+const errorLocation = /^\w+: .* in (.+?\.strict):(?:line )?(\d+)/m;
+const timedOutLine = /^Timed out after \S+ s$/m;
+const overBudget = 'TestDurationMustNotExceedHundredMilliseconds';
 export const testDuration = / \((\d+(?:\.\d+)?) ms\)$/;
 
 /** How many `strict test` processes run at once: configured (0 is half the cores) while VS Code is focused, else one, so
@@ -119,11 +121,21 @@ export function stopProcess(child: ChildProcess): void {
 	}
 }
 
-/** Why `strict test` printed no summary: the error it reports with its location, else what it printed and its exit code. */
+/** Why `strict test` printed no summary: the error it reports with its location or its timeout, else what it printed and its
+ * exit code. Nothing crashed when it stopped at a test over its time budget, that test failed. */
 export function crashText(run: StrictRun): string | undefined {
 	const printed = printedText(run.output);
-	return summaryLine.test(run.output) ? undefined : errorLocation.test(printed) ? printed
-		: `${printed ? printed + '\n' : ''}Strict crashed with exit code ${run.exitCode}`;
+	return summaryLine.test(run.output) || isStoppedByBudget(run.output) ? undefined
+		: errorLocation.test(printed) || timedOutLine.test(printed) ? printed
+			: `${printed ? printed + '\n' : ''}Strict crashed with exit code ${run.exitCode}`;
+}
+
+/** Strict ends a run without its summary when a unit test runs over its time budget, the tests after it did not run. */
+function isStoppedByBudget(output: string): boolean {
+	const lines = output.split(/\r?\n/);
+	const last = lines.length - 1 - [...lines].reverse().findIndex((line) => testLine.test(line.replace(testDuration, '')));
+	return !summaryLine.test(output) && last < lines.length && lines[last].startsWith('Test failed: ') &&
+		(lines[last + 1] ?? '').startsWith(`  got: ${overBudget}`);
 }
 
 /** What Strict printed besides test results with their stacks, its summary, builds and line counts. */
@@ -133,17 +145,42 @@ function printedText(output: string): string {
 		!builtLine.test(line) && !lineCount.test(line)).join('\n');
 }
 
-/** Zero based line of the error Strict reports for file, like `ParsingFailed: ... in Examples/Bad.strict:5`. */
-export function crashLine(output: string, file: string, root: string): number | undefined {
+/** File and zero based line of the error Strict reports, like `ParsingFailed: ... in Examples/Bad.strict:5` or
+ * `ResultMustBeUsed: ... in Queue.strict:line 66`, relative to root, the folder strict ran in. */
+export function crashLocation(output: string, root: string): { file: string; line: number } | undefined {
 	const match = errorLocation.exec(output);
-	return match && normalizeFsPath(path.resolve(root, match[1])) === normalizeFsPath(file) ? Number(match[2]) - 1 : undefined;
+	return match ? { file: path.resolve(root, match[1]), line: Number(match[2]) - 1 } : undefined;
+}
+
+/** A problem shown as the next one to fix: an error stopping all tests of a file, a failed test or a `strict check` issue. */
+export type Problem = { file: string; line: number; message: string; kind: 'crash' | 'test' | 'check' };
+const problemOrder: Problem['kind'][] = ['crash', 'test', 'check'];
+
+/** The problem to fix next outside focus, the file in front of the user: errors stopping tests first, then failed tests, then
+ * check issues, each by file and line. */
+export function nextProblem(problems: Problem[], focus: string | undefined): Problem | undefined {
+	return problems.filter((problem) => !focus || normalizeFsPath(problem.file) !== normalizeFsPath(focus)).sort((first, second) =>
+		problemOrder.indexOf(first.kind) - problemOrder.indexOf(second.kind) || first.file.localeCompare(second.file) ||
+		first.line - second.line)[0];
+}
+
+/** Entries of queue (files to test, folders to check) in the order they may start: focus, the file in front of the user, and the
+ * check of its folder first, only them while focus is red (untested or with problems), so its results come first and alone. */
+export function focusedQueue(queue: string[], focus: string | undefined, isRed: boolean): string[] {
+	if (!focus) {
+		return queue;
+	}
+	const own = [normalizeFsPath(focus), normalizeFsPath(path.dirname(focus))];
+	const first = own.flatMap((key) => queue.filter((entry) => normalizeFsPath(entry) === key));
+	return isRed ? first : [...first, ...queue.filter((entry) => !own.includes(normalizeFsPath(entry)))];
 }
 
 /** One result per test line Strict printed, every discovered test when it only printed a cached pass or crashed. */
 export function testResults(source: string, uri: string, run: StrictRun): TestRunnerNotification[] {
 	const lines = run.output.split(/\r?\n/).map((line) => line.replace(testDuration, ''));
-	let crash = crashText(run);
-	let timedOut = /^Timed out after \S+ s$/m.exec(run.output)?.[0];
+	const crash = crashText(run);
+	const timedOut = timedOutLine.exec(run.output)?.[0];
+	const isStopped = isStoppedByBudget(run.output);
 	const consoleOutput = crash === undefined && printedText(run.output) || undefined;
 	const printed = run.output.split(/\r?\n/).flatMap((line, index) => {
 		const match = testLine.exec(lines[index]);
@@ -157,34 +194,44 @@ export function testResults(source: string, uri: string, run: StrictRun): TestRu
 			: [];
 	});
 	const isCached = crash === undefined && printed.length === 0;
+	const last = printed[printed.length - 1];
 	const result = (expression: string, lineNumber: number, methodName: string, found?: typeof printed[number]):
 		TestRunnerNotification => {
 		const crashed = !found && crash !== undefined;
 		const comparison = expression.lastIndexOf(' is ');
-		const expected = found?.actual === undefined ? undefined : comparison < 0 ? 'true' : expression.slice(comparison + 4);
+		const isOverBudget = found?.actual?.includes(overBudget);
+		const expected = found?.actual === undefined || isOverBudget ? undefined : comparison < 0 ? 'true'
+			: expression.slice(comparison + 4);
 		return {
 			lineNumber, state: crashed || found?.failed ? 0 : 1, uri, methodName, expression, expected, actual: found?.actual,
 			consoleOutput, cached: isCached || undefined, durationMs: found?.durationMs, stackTrace: found?.stackTrace,
 			message: crashed ? crash : !found?.failed ? undefined : found.actual === undefined ? lines[found.index]
-				: `Expected ${expected}, got ${found.actual}`
+				: isOverBudget ? `${found.actual}${isStopped && found === last ? ', the tests after it did not run' : ''}`
+					: `Expected ${expected}, got ${found.actual}`
 		};
 	};
 	const reported = new Set<typeof printed[number]>();
 	const methods = discoverStrictTests(source).filter((method) => !isSlowHeader(method.header) ||
 		printed.some((test) => test.method === method.name));
+	let isTimeoutReported = false;
 	const discovered = methods.flatMap((method) => method.tests.flatMap((test) => {
 		const found = printed.find((candidate) => candidate.line !== undefined ? candidate.line === test.lineNumber
 			: candidate.expression === test.expression && candidate.method === method.name);
 		if (found) {
 			reported.add(found);
-		} else if (timedOut) {
-			crash = `${timedOut} in ${test.expression} (line ${test.lineNumber + 1}), later tests did not run`;
-			timedOut = undefined;
+			return [result(test.expression, test.lineNumber, method.name, found)];
 		}
-		return found || isCached || crash !== undefined ? [result(test.expression, test.lineNumber, method.name, found)] : [];
+		if (timedOut && !isTimeoutReported) {
+			isTimeoutReported = true;
+			return [{ ...result(test.expression, test.lineNumber, method.name), state: 0,
+				message: `${timedOut} in ${test.expression} (line ${test.lineNumber + 1}), later tests did not run` }];
+		}
+		return !isTimeoutReported && (isCached || crash !== undefined) ? [result(test.expression, test.lineNumber, method.name)] : [];
 	}));
-	return discovered.concat(printed.filter((test) => !reported.has(test)).map((test) => result(test.expression,
-		test.line ?? methods.find((method) => method.name === test.method)?.lineNumber ?? 0, test.method, test)));
+	const reportedLines = new Set([...reported].map((test) => test.line));
+	return discovered.concat(printed.filter((test) => !reported.has(test) && (test.line === undefined || !reportedLines.has(test.line)))
+		.map((test) => result(test.expression, test.line ?? methods.find((method) => method.name === test.method)?.lineNumber ?? 0,
+			test.method, test)));
 }
 
 /** Issues printed by `strict check` as `file:line N: Rule: target`, line is zero based. */

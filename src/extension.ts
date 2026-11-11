@@ -10,8 +10,8 @@ import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
 import { StrictLanguage } from './language';
 import { refreshStatusCommand, registerLanguageStatus } from './languageStatus';
 import {
-	checkIssues, crashLine, crashText, dependents, isOnDemand, lineCounts, lineValues, LineValue, runStrict, StrictRun, startProcess, stopProcess, testProcesses,
-	testResults
+	checkIssues, crashLocation, crashText, dependents, focusedQueue, isOnDemand, lineCounts, lineValues, LineValue, nextProblem, Problem, runStrict,
+	StrictRun, startProcess, stopProcess, testProcesses, testResults
 } from './nativeCompiler';
 import {
 	compilerFile, findStrictRoot, normalizeFsPath, projectFolder, resolveIn, rootArgument, strictNotFound, strictPath, strictRoots
@@ -64,6 +64,7 @@ export function activate(context: vscode.ExtensionContext): void {
 		vscode.commands.registerCommand(showResultCommand, (uri: string, lineNumber: number) =>
 			scrunch.showResult(uri, lineNumber)),
 		vscode.window.onDidChangeVisibleTextEditors(() => tester.showValues()),
+		vscode.window.onDidChangeActiveTextEditor(() => tester.resume()),
 		vscode.window.onDidChangeWindowState((state) => state.focused && tester.resume()),
 		vscode.tasks.onDidStartTask((event) => {
 			if (event.execution.task.definition.command === 'build') { builds.set(event.execution, tester.hold()); }
@@ -209,11 +210,18 @@ function processTerminal(file: string, args: string[], cwd: string,
 	};
 }
 
-/** Runs inline tests (`test`) and validators (`check`) with the newest strict compiler, several processes at once. */
+/** Runs inline tests (`test`) and validators (`check`) with the newest strict compiler, several processes at once. The file in
+ * front of the user goes first and alone, everything else only once it is green, then the status bar points to the next problem. */
 class NativeTester implements ScrunchTester, vscode.Disposable {
 	private readonly checks = vscode.languages.createDiagnosticCollection('strict');
 	private readonly crashes = vscode.languages.createDiagnosticCollection('strict tests');
+	private readonly nextStatus = vscode.window.createStatusBarItem('strict.next', vscode.StatusBarAlignment.Left, 99);
 	private readonly files = new Set<string>();
+	/** Whether all tests of a file passed in its last run or cached result. */
+	private readonly outcomes = new Map<string, boolean>();
+	/** Failed files tested again alone once in front of the user, their failure came from the cache or a run beside others: a
+	 * test over its time budget while many ran at once may pass alone. */
+	private readonly retests = new Set<string>();
 	private readonly queue = new Set<string>();
 	private readonly aborts = new Map<string, AbortController>();
 	private readonly waiting = new Map<string, Array<() => void>>();
@@ -245,6 +253,7 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		if (this.saveTimer) { clearTimeout(this.saveTimer); void this.memento.update('strict.testResults', this.cache); }
 		this.checks.dispose();
 		this.crashes.dispose();
+		this.nextStatus.dispose();
 	}
 
 // On-demand files run at startup only when their bytecode is newer than their source. Dependencies can invalidate it.
@@ -262,6 +271,10 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			}
 			if (!saved || saved.stamp !== (saved.run.exitCode === 0 ? stamp : this.failedStamp(root, projectOf(file)))) { return true; }
 			const results = testResults(readText(file), vscode.Uri.file(file).toString(), saved.run).map((result) => ({ ...result, cached: true }));
+			this.outcomes.set(file, results.every((result) => result.state !== 0));
+			if (!this.outcomes.get(file)) {
+				this.retests.add(file);
+			}
 			this.scrunch().applyResults(file, results);
 			this.valued.add(file);
 			if (saved.values) { this.scrunch().applyValues(file, saved.values); }
@@ -329,6 +342,8 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 	public deleted(file: string): void {
 		this.revision++; this.failedStamps.clear();
 		this.files.delete(file);
+		this.outcomes.delete(file);
+		this.retests.delete(file);
 		delete this.cache[file]; this.saveCache();
 		this.checks.delete(vscode.Uri.file(file));
 		this.crashes.delete(vscode.Uri.file(file));
@@ -395,13 +410,33 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		this.next();
 	}
 
+	/** The tested .strict file of the active editor. */
+	private focus(): string | undefined {
+		const document = vscode.window.activeTextEditor?.document;
+		const key = document?.languageId === 'strict' ? normalizeFsPath(document.uri.fsPath) : undefined;
+		return key ? [...this.files].find((file) => normalizeFsPath(file) === key) : undefined;
+	}
+
+	/** Whether focus is still tested or checked, failed or has check issues. */
+	private isRed(focus: string): boolean {
+		return [focus, path.dirname(focus)].some((entry) => this.queue.has(entry) || this.aborts.has(entry)) ||
+			this.outcomes.get(focus) === false || (this.checks.get(vscode.Uri.file(focus))?.length ?? 0) > 0;
+	}
+
 	private next(): void {
 		const root = strictRoot();
 		void vscode.commands.executeCommand(refreshStatusCommand);
 		const slots = testProcesses(vscode.window.state.focused,
 			vscode.workspace.getConfiguration('strict').get<number>('parallelTests', 0), os.cpus().length);
-		while (root && !this.holds && this.running < slots && this.queue.size > 0) {
-			const entry = this.queue.values().next().value as string;
+		const focus = this.focus();
+		if (focus && this.retests.delete(focus)) {
+			this.queue.add(focus);
+		}
+		const requested = [...this.queue].filter((entry) => this.waiting.has(entry));
+		for (const entry of new Set([...focusedQueue([...this.queue], focus, focus !== undefined && this.isRed(focus)), ...requested])) {
+			if (!root || this.holds || this.running >= slots) {
+				break;
+			}
 			this.queue.delete(entry);
 			this.running++;
 			const waiters = this.waiting.get(entry) ?? [];
@@ -418,9 +453,36 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 				this.next();
 			});
 		}
+		this.showNext(focus);
+	}
+
+	/** Once everything ran and focus is green: the next problem elsewhere in the status bar, a click opens it. */
+	private showNext(focus: string | undefined): void {
+		const problems: Problem[] = [];
+		const add = (collection: vscode.DiagnosticCollection, kind: Problem['kind']) => collection.forEach((uri, diagnostics) =>
+			diagnostics.forEach((diagnostic) => {
+				const where = diagnostic.relatedInformation?.[0]?.location ?? new vscode.Location(uri, diagnostic.range);
+				problems.push({ file: where.uri.fsPath, line: where.range.start.line, message: diagnostic.message, kind });
+			}));
+		add(this.crashes, 'crash');
+		add(this.checks, 'check');
+		const all = problems.concat(this.scrunch().failedTests());
+		const isIdle = this.running === 0 && this.queue.size === 0 && !(focus && this.isRed(focus));
+		const problem = isIdle ? nextProblem(all, focus) : undefined;
+		if (!problem) {
+			this.nextStatus.hide();
+			return;
+		}
+		const files = new Set(all.map((other) => normalizeFsPath(other.file))).size;
+		this.nextStatus.text = `$(arrow-right) ${path.basename(problem.file)}:${problem.line + 1}`;
+		this.nextStatus.tooltip = `Next problem to fix (${files} files have problems): ${problem.message.split('\n')[0]}`;
+		this.nextStatus.command = { command: 'vscode.open', title: 'Open next problem',
+			arguments: [vscode.Uri.file(problem.file), { selection: new vscode.Range(problem.line, 0, problem.line, 0) }] };
+		this.nextStatus.show();
 	}
 
 	private async test(root: string, file: string, signal?: AbortSignal): Promise<void> {
+		const isFocused = file === this.focus();
 		this.scrunch().setBusy(file, true);
 		const withLines = this.withLines.delete(file);
 		const revision = this.revision;
@@ -442,17 +504,33 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		const uri = vscode.Uri.file(file);
 		const source = readText(file);
 		const crash = crashText(result);
-		const diagnostic = crash && new vscode.Diagnostic(lineRange(source, crashLine(result.output, file, project) ?? 0), crash,
+		const location = crash ? crashLocation(crash, project) : undefined;
+		const isOwn = location !== undefined && normalizeFsPath(location.file) === normalizeFsPath(file);
+		const diagnostic = crash && new vscode.Diagnostic(lineRange(source, isOwn ? location.line : 0), crash,
 			vscode.DiagnosticSeverity.Error);
 		if (diagnostic) {
 			diagnostic.source = testErrorSource;
-			diagnostic.code = /^(\w+): /.exec(diagnostic.message)?.[1];
+			diagnostic.code = /^(?:Error: )?(\w+): /.exec(diagnostic.message)?.[1];
+			if (location && !isOwn) {
+				diagnostic.relatedInformation = [new vscode.DiagnosticRelatedInformation(new vscode.Location(
+					vscode.Uri.file(location.file), new vscode.Position(location.line, 0)), crash.split('\n')[0])];
+			}
 		}
-		afterTyping(`crashes ${file}`, () => this.crashes.set(uri, diagnostic ? [diagnostic] : []));
+		afterTyping(`crashes ${file}`, () => {
+			setChanged(this.crashes, uri, diagnostic ? [diagnostic] : []);
+			this.next();
+		});
 		if (crash) {
 			output.appendLine(`${file}: ${crash}`);
 		}
 		const notifications = testResults(source, uri.toString(), result);
+		const isPassed = !crash && notifications.every((notification) => notification.state !== 0);
+		this.outcomes.set(file, isPassed);
+		if (isPassed || isFocused) {
+			this.retests.delete(file);
+		} else {
+			this.retests.add(file);
+		}
 		if (!withLines) {
 			const testsMs = notifications.reduce((total, notification) => total + (notification.durationMs ?? 0), 0);
 			if (result.durationMs >= 1000) {
@@ -473,7 +551,8 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		const root = strictRoot();
 		if (!vscode.window.state.focused) { return; }
 		for (const file of new Set(vscode.window.visibleTextEditors.map((editor) => editor.document.uri.fsPath))) {
-			if (root && !this.holds && this.files.has(file) && !this.valued.has(file)) {
+			const isTesting = this.queue.has(file) || this.aborts.has(file);
+			if (root && !this.holds && this.files.has(file) && !this.valued.has(file) && !isTesting) {
 				this.valued.add(file);
 				void this.values(root, file);
 			}
@@ -506,16 +585,28 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			vscode.workspace.getConfiguration('strict').get<boolean>('checkExistingMethods', true));
 		const files = new Map([...this.files].filter((file) => normalizeFsPath(path.dirname(file)) === normalizeFsPath(folder)).
 			concat(issues.map((issue) => issue.file)).map((file) => [normalizeFsPath(file), file]));
-		for (const [key, file] of files) {
+		const diagnostics = [...files].map(([key, file]) => {
 			const source = readText(file);
-			const diagnostics = issues.filter((issue) => normalizeFsPath(issue.file) === key).map((issue) => {
+			return [vscode.Uri.file(file), issues.filter((issue) => normalizeFsPath(issue.file) === key).map((issue) => {
 				const diagnostic = new vscode.Diagnostic(lineRange(source, issue.line), issue.target,
 					vscode.DiagnosticSeverity.Error);
 				diagnostic.code = issue.rule;
 				return polishDiagnostic(diagnostic, vscode.Uri.file(file), root);
-			});
-			afterTyping(`checks ${file}`, () => this.checks.set(vscode.Uri.file(file), diagnostics));
-		}
+			})] as const;
+		});
+		afterTyping(`checks ${folder}`, () => {
+			diagnostics.forEach(([uri, found]) => setChanged(this.checks, uri, found));
+			this.next();
+		});
+	}
+}
+
+/** Sets diagnostics of uri only when they differ from the shown ones, setting the same again redraws them and the Testing view. */
+function setChanged(collection: vscode.DiagnosticCollection, uri: vscode.Uri, diagnostics: vscode.Diagnostic[]): void {
+	const text = (items: readonly vscode.Diagnostic[]) => JSON.stringify(items.map((item) => [item.range, item.message, item.code,
+		item.relatedInformation?.map((related) => [related.location.uri.toString(), related.location.range])]));
+	if (text(collection.get(uri) ?? []) !== text(diagnostics)) {
+		collection.set(uri, diagnostics);
 	}
 }
 

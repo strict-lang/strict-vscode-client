@@ -3,8 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-	checkIssues, crashLine, crashText, dependents, gitIgnored, isOnDemand, lineCounts, lineValues, runProcess, startProcess, stopProcess,
-	testProcesses, testResults
+	checkIssues, crashLocation, crashText, dependents, focusedQueue, gitIgnored, isOnDemand, lineCounts, lineValues, nextProblem, runProcess,
+	startProcess, stopProcess, testProcesses, testResults
 } from '../../nativeCompiler';
 import { isIgnoredBy } from '../../paths';
 
@@ -15,6 +15,9 @@ const adder = [
 	'\tAdder.Add(2, 2) is 4',
 	'\tfirst + second'
 ].join('\n');
+const threeTests = adder.replace('\tfirst + second', '\tAdder.Add(3, 2) is 4\n\tfirst + second');
+const overBudget = 'TestDurationMustNotExceedHundredMilliseconds: unit test exceeded 100 ms; use Slow(ReturnType) for explicit ' +
+	'functional tests';
 
 suite('native compiler', () => {
 	test('explicit functional runs can disable the automatic timeout', async () => {
@@ -203,11 +206,30 @@ suite('native compiler', () => {
 		assert.ok(results[1].message?.includes('3221225477'));
 	});
 
-	test('testResults names the test that timed out instead of a crash', () => {
-		const results = testResults(adder, 'file:///Adder.strict', {
+	test('testResults names the test that timed out instead of a crash, the later tests did not run', () => {
+		const results = testResults(threeTests, 'file:///Adder.strict', {
 			exitCode: -1, durationMs: 60000, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\nTimed out after 60 s'
 		});
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 1], [3, 0]]);
 		assert.strictEqual(results[1].message, 'Timed out after 60 s in Adder.Add(2, 2) is 4 (line 4), later tests did not run');
+	});
+
+	test('testResults of a run stopped at an over budget test fail only that test, the later tests did not run', () => {
+		const run = { exitCode: 1, durationMs: 300, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.02 ms)\n' +
+			`Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4\n  got: ${overBudget}\n` };
+		const results = testResults(threeTests, 'file:///Adder.strict', run);
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.expected]), [[2, 1, undefined],
+			[3, 0, undefined]]);
+		assert.strictEqual(results[1].message, `${overBudget}, the tests after it did not run`);
+		assert.strictEqual(crashText(run), undefined);
+	});
+
+	test('testResults keep the failure of a test Strict reported again as passed after its budget ran out', () => {
+		const results = testResults(adder, 'file:///Adder.strict', { exitCode: 0, durationMs: 3000,
+			output: `Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\n  got: ${overBudget}\n` +
+				'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (2036.06 ms)\n' +
+				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4 (0.1 ms)\nAll tests passed in Adder.strict\n' });
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 0], [3, 1]]);
 	});
 
 	test('testProcesses use the configured count or half the cores while focused, one in the background', () => {
@@ -227,13 +249,36 @@ suite('native compiler', () => {
 		assert.strictEqual(crashText({ exitCode: 1, durationMs: 9, output: 'Unsupported native call DefaultProbe.Run\n' }),
 			'Unsupported native call DefaultProbe.Run\nStrict crashed with exit code 1');
 		assert.strictEqual(crashText({ exitCode: 0, durationMs: 9, output: 'All tests passed in A.strict' }), undefined);
+		assert.strictEqual(crashText({ exitCode: 1, durationMs: 9, output: 'Error: ResultMustBeUsed: a.Stop in Queue.strict:line 66, ' +
+			'use the value\n\tat ErrorScope.Used in Bytecode/ErrorScope.strict:line 71\n\t... (skipped 12 lines)\n' +
+			'\tat Strict.Ran in Strict.strict:line 82\n' }), 'Error: ResultMustBeUsed: a.Stop in Queue.strict:line 66, use the value');
 	});
 
-	test('crashLine is the zero based line of an error Strict reports in the tested file', () => {
+	test('crashLocation is the file and zero based line of the error Strict reports, also in another file', () => {
 		const file = path.resolve('C:\\Strict', 'Examples', 'Bad.strict');
-		assert.strictEqual(crashLine('ParsingFailed: number +* minimum in Examples/Bad.strict:5', file, 'C:\\Strict'), 4);
-		assert.strictEqual(crashLine(`TypeNotFound: Foo used in ${file}:4 is not in this folder`, file, 'C:\\Strict'), 3);
-		assert.strictEqual(crashLine('MethodNotFound: Number.Foo used in Examples/Other.strict:2', file, 'C:\\Strict'), undefined);
+		assert.deepStrictEqual(crashLocation('ParsingFailed: number +* minimum in Examples/Bad.strict:5', 'C:\\Strict'), { file, line: 4 });
+		assert.deepStrictEqual(crashLocation(`TypeNotFound: Foo used in ${file}:4 is not in this folder`, 'C:\\Strict'), { file, line: 3 });
+		assert.deepStrictEqual(crashLocation('Error: ResultMustBeUsed: a.Stop in Examples/Other.strict:line 2, use the value',
+			'C:\\Strict'), { file: path.resolve('C:\\Strict', 'Examples', 'Other.strict'), line: 1 });
+		assert.strictEqual(crashLocation('Strict crashed with exit code 1', 'C:\\Strict'), undefined);
+	});
+
+	test('focusedQueue starts the file in front of the user and the check of its folder first, only them while it is red', () => {
+		const queue = [path.join('C:', 'A'), path.join('C:', 'A', 'One.strict'), path.join('C:', 'B', 'Two.strict'), path.join('C:', 'B'),
+			path.join('C:', 'B', 'Three.strict')];
+		const focus = path.join('C:', 'B', 'Three.strict');
+		assert.deepStrictEqual(focusedQueue(queue, focus, true), [focus, path.join('C:', 'B')]);
+		assert.deepStrictEqual(focusedQueue(queue, focus, false), [focus, path.join('C:', 'B'), ...queue.slice(0, 3)]);
+		assert.deepStrictEqual(focusedQueue(queue, undefined, true), queue);
+	});
+
+	test('nextProblem is the first problem elsewhere: errors stopping tests, then failed tests, then check issues', () => {
+		const problems = [{ file: 'C:/B.strict', line: 9, message: 'MethodLengthMustNotExceedTwelve: Run', kind: 'check' as const },
+			{ file: 'C:/C.strict', line: 2, message: 'Expected 4, got 3', kind: 'test' as const },
+			{ file: 'C:/A.strict', line: 5, message: 'ResultMustBeUsed: a.Stop', kind: 'crash' as const }];
+		assert.strictEqual(nextProblem(problems, undefined)?.file, 'C:/A.strict');
+		assert.strictEqual(nextProblem(problems, 'c:\\A.strict')?.file, 'C:/C.strict');
+		assert.strictEqual(nextProblem(problems.slice(0, 1), 'C:/B.strict'), undefined);
 	});
 
 	test('checkIssues reads file, zero based line, rule and target of each issue line', () => {

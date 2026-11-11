@@ -51,7 +51,10 @@ For safe fixes on save:
 ## SCrunch tests
 
 Strict files save automatically after edits. Tests run when a workspace opens and after changes to a type or its
-dependencies. Gutter results update first; diagnostics, inline failures and Testing view follow when editing pauses.
+dependencies. The file in the active editor and the check of its folder run first and alone; everything else waits until
+that file passes with no check issues, then the status bar points to the next problem (errors stopping tests, failed
+tests, check issues). Gutter results update first; diagnostics, inline failures and Testing view follow when editing
+pauses. Test Results only shows the visible files while tests run, everything once they are done.
 Testing view supports run and coverage. Coverage shows line counts and timings; failures link to Strict source.
 
 Slow tests get a `slow` tag. **SCrunch: Show Slowest Tests** lists timings, **Show Tests for Line** finds covering tests,
