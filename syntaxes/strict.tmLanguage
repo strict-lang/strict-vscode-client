@@ -536,9 +536,15 @@
         </dict>
         <dict>
           <key>match</key>
-          <string>((if|else|for|then|from|return)(?!([a-zA-Z]+[a-zA-Z0-9_]*)))</string>
+          <string>((if|for|from|return)(?!([a-zA-Z]+[a-zA-Z0-9_]*)))</string>
           <key>name</key>
           <string>keyword.control.strict</string>
+        </dict>
+        <dict>
+          <key>match</key>
+          <string>(then|else)(?![a-zA-Z0-9_])</string>
+          <key>name</key>
+          <string>keyword.control.conditional.$1.strict</string>
         </dict>
         <dict>
           <key>match</key>
@@ -957,43 +963,25 @@
       <array>
         <dict>
           <key>match</key>
-          <string>(\b(?:is)\b)(\s+)(\b(?:not)\b)(\s+)(\b(?:in)\b)</string>
-          <key>captures</key>
-          <dict>
-            <key>1</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-            <key>2</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-            <key>3</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-            <key>4</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-            <key>5</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-          </dict>
+          <string>(&lt;=|&gt;=|&lt;|&gt;|\b(?:is|in)\b)</string>
+          <key>name</key>
+          <string>keyword.operator.comparison.strict</string>
         </dict>
         <dict>
           <key>match</key>
-          <string>(\b(?:is)\b)(\s+)(\b(?:not)\b)</string>
-          <key>captures</key>
-          <dict>
-            <key>1</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-            <key>2</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-            <key>3</key>
-            <dict><key>name</key><string>keyword.operator.strict</string></dict>
-          </dict>
-        </dict>
-        <dict>
-          <key>match</key>
-          <string>([\{\}.\+\|\-\(\)&lt;&gt;\[\]\!\=\%\*\,\:\/\^]+)</string>
+          <string>([\{\}.\+\|\-\(\)\[\]\!\=\%\*\,\:\/\^]+)</string>
           <key>name</key>
           <string>keyword.operator.strict</string>
         </dict>
         <dict>
           <key>match</key>
-          <string>(\b(?:is|not|and|or|xor|in|to)\b)</string>
+          <string>\b(and|or|xor|not)\b</string>
+          <key>name</key>
+          <string>keyword.operator.logical.$1.strict</string>
+        </dict>
+        <dict>
+          <key>match</key>
+          <string>\bto\b</string>
           <key>name</key>
           <string>keyword.operator.strict</string>
         </dict>

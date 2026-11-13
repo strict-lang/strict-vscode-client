@@ -362,6 +362,40 @@
       "explorer.fileNesting.patterns": {
         "*.strict": "${capture}"
       },
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": "keyword.operator.logical.not.strict",
+            "settings": {
+              "foreground": "#E0443E"
+            }
+          },
+          {
+            "scope": "keyword.operator.logical.and.strict",
+            "settings": {
+              "foreground": "#C87A00"
+            }
+          },
+          {
+            "scope": "keyword.operator.logical.or.strict",
+            "settings": {
+              "foreground": "#22A39F"
+            }
+          },
+          {
+            "scope": "keyword.operator.logical.xor.strict",
+            "settings": {
+              "foreground": "#A86ADB"
+            }
+          },
+          {
+            "scope": "keyword.operator.comparison.strict",
+            "settings": {
+              "foreground": "#888888"
+            }
+          }
+        ]
+      },
       "[strict]": {
         "editor.insertSpaces": false,
         "editor.detectIndentation": false,
