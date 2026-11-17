@@ -12,7 +12,7 @@ import {
 	workspace
 } from 'vscode';
 import { formatDuration } from './testResults';
-import { formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, LineCoverageMark } from './scrunchModel';
+import { formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, LineCoverageMark, testRule } from './scrunchModel';
 
 export const showResultCommand = 'strict-vscode-client.scrunch.showResult';
 /** Errors, end of line texts and Test Results wait this long after the last change of a Strict file, gutter icons do not. */
@@ -205,7 +205,8 @@ export function slowTestMilliseconds(): number {
 /** A failure or slowdown after line, else a small faint hint: the time of a method's tests or how often line ran. */
 function inlineText(mark: LineCoverageMark, line: string): DecorationOptions['renderOptions'] {
 	const failure = formatInlineFailure(mark);
-	const slow = formatInlineSlow(mark, slowTestMilliseconds());
+	const isFresh = mark.kind === 'status' && !mark.failed && !mark.tests.some((test) => test.cached);
+	const slow = (isFresh ? testRule(line.trim(), mark.durationMs) : undefined) ?? formatInlineSlow(mark, slowTestMilliseconds());
 	const hint = mark.kind === 'status' ? formatDuration(mark.durationMs) : mark.value && formatInlineValue(mark.value, line);
 	const margin = '0 0 0 2ch';
 	return failure ?? slow ? { after: { contentText: failure ?? slow, margin, color: failure ? '#a9a9a9'

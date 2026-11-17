@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import {
 	formatCoverageHover, formatInlineFailure, formatInlineSlow, formatInlineValue, isSlow, lineCoverageMarks, LineCoverageMark,
-	remember, slowestTests, TimingHistory
+	remember, slowestTests, testRule, TimingHistory
 } from '../../scrunchModel';
 import { discoverStrictTests } from '../../scrunchDiscover';
 
@@ -77,6 +77,16 @@ suite('decorations', () => {
 		const each = 'BlockGrid((0, 0, '.repeat(10);
 		assert.strictEqual(formatCoverageHover({ lineNumber: 3, failed: false, kind: 'coverage', tests: [],
 			value: { file: 'A.strict', line: 3, hits: 7, each } }), `Ran 7 times: ${each}`);
+	});
+
+	test('test time rule asks for slow from 200 ms, native from 500 ms and no slow under 10 ms', () => {
+		assert.deepStrictEqual([testRule('Add(a Number) Number', 250), testRule('Add(a Number) Number', 50),
+			testRule('Loaded(path Text) Moss slow', 917), testRule('Loaded(path Text) Moss slow', 1500),
+			testRule('Loaded(path Text) Moss slow', 4), testRule('Loaded(path Text) Moss slow', 80),
+			testRule('Generated(model Text) Numbers native', 239000)],
+			['250ms: mark the method slow', undefined, '917ms: from 500 ms on mark the method native',
+				'1.5s: over 1 s, mark the method native', '4.0ms: under 10 ms, remove slow unless it does file, process or network IO',
+				undefined, undefined]);
 	});
 
 	test('slow marker tells the time before a slowdown', () => {

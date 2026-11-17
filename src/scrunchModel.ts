@@ -1,5 +1,5 @@
 import { LineCount, LineValue } from './nativeCompiler';
-import { DiscoveredMethod, DiscoveredTest, isSlowHeader } from './scrunchDiscover';
+import { DiscoveredMethod, DiscoveredTest, isNativeHeader, isSlowHeader } from './scrunchDiscover';
 import { formatDuration, parseDiscrepancy, parseStackFrames, TestRunnerNotification } from './testResults';
 
 export type LineCoverageMark = {
@@ -190,6 +190,22 @@ export function formatInlineSlow(mark: LineCoverageMark, slowMs: number): string
 	const executed = mark.count ? ` (self ${formatDuration(mark.count.selfMs)}, ${times(mark.count.executions)})` : '';
 	return isTimed && !mark.failed && isSlow({ durationMs: mark.durationMs, cached: mark.tests.some((test) => test.cached) }, slowMs)
 		? `slow: ${formatDuration(mark.durationMs)}${before}${executed}` : undefined;
+}
+
+/** The test time rule on a method header: unit tests stay under 200 ms, slow ones take 10 ms to 1 s on the VM and
+ * from 500 ms on fit better as native, native ones are not timed here. */
+export function testRule(header: string, durationMs: number | undefined): string | undefined {
+	if (durationMs === undefined || isNativeHeader(header)) {
+		return undefined;
+	}
+	const took = formatDuration(durationMs);
+	if (!isSlowHeader(header)) {
+		return durationMs >= 200 ? `${took}: mark the method slow` : undefined;
+	}
+	if (durationMs >= 500) {
+		return `${took}: ${durationMs >= 1000 ? 'over 1 s, ' : 'from 500 ms on '}mark the method native`;
+	}
+	return durationMs < 10 ? `${took}: under 10 ms, remove slow unless it does file, process or network IO` : undefined;
 }
 
 /** A cached result did not run now, its remembered time may be from a busy startup and is not shown as slow. */

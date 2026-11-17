@@ -136,7 +136,7 @@ suite('scrunch discover', () => {
 	});
 
 	test('Slow return types are transparent and their tests require an explicit run', () => {
-		const [method] = discoverStrictTests('Merged Slow(Numbers)\n\tDemo.Merged.First is 1\n\t(1, 2)');
+		const [method] = discoverStrictTests('Merged Numbers slow\n\tDemo.Merged.First is 1\n\t(1, 2)');
 		assert.strictEqual(isManualMethod(method), true);
 		assert.strictEqual(method.runnable, true);
 		assert.strictEqual(shouldExecuteManual(method, false), false);

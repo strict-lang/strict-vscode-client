@@ -71,9 +71,13 @@ export function isRunnableHeader(header: string): boolean {
 	return inside.length === 0 || inside.split(',').every((part) => part.includes('='));
 }
 
+/** A header ending in slow or native marks functional tests, which typing runs skip; native ones only run natively. */
 export function isSlowHeader(header: string): boolean {
-	const rest = header.slice(methodName(header).length);
-	return (rest.startsWith('(') ? rest.slice(closingBracket(rest) + 1) : rest).trimStart().startsWith('Slow(');
+	return /\s(slow|native)\s*$/.test(header);
+}
+
+export function isNativeHeader(header: string): boolean {
+	return /\snative\s*$/.test(header);
 }
 
 /** Index of the bracket closing the one text starts with, brackets in texts are skipped. */
