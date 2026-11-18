@@ -15,11 +15,13 @@ export type LineCount = { file: string; line: number; executions: number; ms: nu
 export type LineValue = { file: string; line: number; hits: number; name?: string; value?: string; each?: string };
 
 const defaultTimeoutMs = 60000;
-const summaryLine = /^(All tests passed|\d+ (tests )?failed) in /m;
-const builtLine = /^Built .+\.test(\.exe)?$/;
+const upToDateLine = /^Tests up to date: /m;
+/** Ends a test run, `Tests up to date: A.strict (...) < A.test.exe (...)` when its native tests passed and nothing changed. */
+const summaryLine = /^((All tests passed|\d+ (tests )?failed) in |Tests up to date: )/m;
+const builtLine = /^Built .+\.test(\.exe)?(, unchanged)?$/;
 const lineCount = /^Line (.+?\.strict):(\d+) executed (\d+) times in (\d+(?:\.\d+)?) ms \(self (-?\d+(?:\.\d+)?) ms\)$/;
 const valueLine = /^Value (.+?\.strict):line (\d+) hit (\d+) times(?:(, each: (.*))|: (.+?) = (.*))?$/;
-const testLine = /^Test (passed|failed): (.*) in (\S+?)(?: at .+:line (\d+))?$/;
+const testLine = /^Test (passed|failed): (.*) in (\S+?)(?: at .+?:line (\d+))?(?: took \d+ ms on the VM, .*)?$/;
 const stackLine = /^\s+(at .+ in .+:line \d+|\.\.\. \(skipped \d+ lines\))$/;
 const issuePattern = /^(.+?\.strict):line (\d+): (\w+): (.*)$/;
 const errorLocation = /^\w+: .* in (.+?\.strict):(?:line )?(\d+)/m;
@@ -175,7 +177,8 @@ export function focusedQueue(queue: string[], focus: string | undefined, isRed: 
 	return isRed ? first : [...first, ...queue.filter((entry) => !own.includes(normalizeFsPath(entry)))];
 }
 
-/** One result per test line Strict printed, every discovered test when it only printed a cached pass or crashed. */
+/** One result per test line Strict printed (a slow test printed as passed and then as failed for taking too long failed), every
+ * discovered test when it only printed a cached pass or crashed, slow and native ones only when native tests are up to date. */
 export function testResults(source: string, uri: string, run: StrictRun): TestRunnerNotification[] {
 	const lines = run.output.split(/\r?\n/).map((line) => line.replace(testDuration, ''));
 	const crash = crashText(run);
@@ -212,13 +215,15 @@ export function testResults(source: string, uri: string, run: StrictRun): TestRu
 	};
 	const reported = new Set<typeof printed[number]>();
 	const methods = discoverStrictTests(source).filter((method) => !isSlowHeader(method.header) ||
-		printed.some((test) => test.method === method.name));
+		upToDateLine.test(run.output) || printed.some((test) => test.method === method.name));
 	let isTimeoutReported = false;
 	const discovered = methods.flatMap((method) => method.tests.flatMap((test) => {
-		const found = printed.find((candidate) => candidate.line !== undefined ? candidate.line === test.lineNumber
+		const all = printed.filter((candidate) => candidate.line !== undefined ? candidate.line === test.lineNumber
 			: candidate.expression === test.expression && candidate.method === method.name);
+		const found = all.find((candidate) => candidate.failed) ?? all[0];
 		if (found) {
-			reported.add(found);
+			all.forEach((candidate) => reported.add(candidate));
+			found.durationMs ??= all[0].durationMs;
 			return [result(test.expression, test.lineNumber, method.name, found)];
 		}
 		if (timedOut && !isTimeoutReported) {

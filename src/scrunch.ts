@@ -629,7 +629,7 @@ export class ScrunchController implements Disposable {
 		await commands.executeCommand('workbench.panel.testResults.view.focus');
 	}
 
-	/** Tests the files of the requested items again without cache (to time them) in one run, with line counts
+	/** Tests the files of the requested items in one run, Strict answers from its caches for unchanged ones, with line counts
 	 * for the Coverage profile, the Stop button kills Strict. */
 	private async onRunRequest(request: TestRunRequest, token: CancellationToken): Promise<void> {
 		const items = itemsIn(request, this.controller);

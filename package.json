@@ -64,7 +64,7 @@
       },
       {
         "command": "strict-vscode-client.scrunch.timeAll",
-        "title": "Time All Tests (without cache)",
+        "title": "Time All Tests",
         "category": "SCrunch"
       },
       {
@@ -345,6 +345,8 @@
     "configurationDefaults": {
       "files.exclude": {
         "**/*.strictbinary": true,
+        "**/*.slowpassed": true,
+        "**/*.nativecache": true,
         "**/*.test": {
           "when": "$(basename).strict"
         },

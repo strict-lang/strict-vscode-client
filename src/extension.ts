@@ -10,14 +10,14 @@ import { DiagnosticHighlighter, polishDiagnostic } from './diagnostics';
 import { StrictLanguage } from './language';
 import { refreshStatusCommand, registerLanguageStatus } from './languageStatus';
 import {
-	checkIssues, crashLocation, crashText, dependents, focusedQueue, isOnDemand, lineCounts, lineValues, LineValue, nextProblem, Problem, runStrict,
-	StrictRun, startProcess, stopProcess, testProcesses, testResults
+	checkIssues, crashLocation, crashText, dependents, focusedQueue, isOnDemand, lineCounts, lineValues, LineValue, nextProblem,
+	Problem, runStrict, StrictRun, startProcess, stopProcess, testProcesses, testResults
 } from './nativeCompiler';
 import {
 	compilerFile, findStrictRoot, normalizeFsPath, projectFolder, resolveIn, rootArgument, strictNotFound, strictPath, strictRoots
 } from './paths';
 import { cachedInputs, failedInputs, isStrictBinaryPath, strictBinaryPath } from './scrunchCache';
-import { discoverStrictTests, isSlowHeader } from './scrunchDiscover';
+import { discoverStrictTests, isNativeHeader, isSlowHeader } from './scrunchDiscover';
 import { registerScrunch, ScrunchController, ScrunchTester, testErrorSource } from './scrunch';
 import { detectedTasks, nativeGame, runTargets, StrictTask, taskCommand } from './tasks';
 
@@ -288,12 +288,12 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			vscode.workspace.getConfiguration('strict').get<string[]>('onDemandFolders', []));
 	}
 
-	/** Runs every test again to time it. */
+	/** Tests every file, Strict answers from its caches for unchanged ones, their last measured times stay. */
 	public timeAll(): Promise<void> {
 		return this.retest([...this.files]);
 	}
 
-	/** Tests files first, without their .strictbinary cache (Strict writes it again when all tests pass), withLines natively
+	/** Tests files first, Strict only runs what changed since its tests passed (obj/Name.strictbinary), withLines natively
 	 * counting each line (`strict test <file> lines`), resolves when the runs started for them finished. Aborting stops the
 	 * runs started for this call, a file still queued is tested later like any other change. */
 	public async retest(files: string[], signal?: AbortSignal, withLines = false): Promise<void> {
@@ -325,7 +325,6 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 			if (withLines) {
 				this.withLines.add(file);
 			}
-			fs.rmSync(strictBinaryPath(file), { force: true });
 		});
 		this.enqueue(files, true);
 		await done;
@@ -365,15 +364,16 @@ class NativeTester implements ScrunchTester, vscode.Disposable {
 		}
 		const project = projectOf(uri.fsPath);
 		const file = strictPath(project, uri.fsPath);
-		const args = methodName === 'Run' ? [file] : ['test', file, rootArgument(project, root), methodName];
+		const args = methodName === 'Run' ? [file] : ['test', file, rootArgument(project, root), methodName,
+			...isNativeHeader(method.header) ? ['native'] : []];
 		const result = await runStrict(root, args, { signal, cwd: project, timeoutMs: 0 });
-		for (const notification of testResults(source, uri.toString(), result)) {
-			this.scrunch().applyResult(notification);
-		}
+		const results = testResults(source, uri.toString(), result);
+		results.forEach((notification) => this.scrunch().applyResult(notification));
+		const isFailed = result.exitCode !== 0;
 		this.scrunch().applyResult({
-			lineNumber: method.lineNumber, state: result.exitCode === 0 ? 1 : 0, uri: uri.toString(), methodName,
+			lineNumber: method.lineNumber, state: isFailed ? 0 : 1, uri: uri.toString(), methodName,
 			consoleOutput: result.output, durationMs: result.durationMs,
-			message: result.exitCode === 0 ? undefined : `Exit code ${result.exitCode}`
+			message: isFailed ? `Exit code ${result.exitCode}` : undefined
 		});
 	}
 

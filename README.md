@@ -21,7 +21,7 @@ Use `run` snippet for a program, or write a method header followed by its tests 
 
 Right-click a game folder or `.strict` file in Explorer for **Run File**, **Build Native Executable**, or **Build for Platform...**. Folders prefer their same-named program (e.g. `WebWars/WebWars.strict`); folders with several programs show a picker. F5 runs the current file without starting a debugger. Only `Run` methods can launch programs. On Windows, games with a `Content` folder build and launch their native release in its content directory. F5 on a helper file uses its folder's named game entry point.
 
-SCrunch restores successful test results from valid `.strictbinary` source/data manifests and persists results and visible values across window reloads. Changed dependencies invalidate affected successful results. Failed results are also persisted; without a native success cache, their input check conservatively covers the project. **Time All Tests (without cache)** and explicit test runs still force a retest.
+SCrunch restores successful test results from valid `.strictbinary` source/data manifests and persists results and visible values across window reloads. Changed dependencies invalidate affected successful results. Failed results are also persisted; without a native success cache, their input check conservatively covers the project. Explicit test runs and **Time All Tests** do not force a retest either: Strict keeps passed unit tests in `obj/Name.strictbinary`, slow ones in `.slowpassed` and native ones in `.nativecache` with their test executable, only what changed runs again. `strict test <folder> full` wipes those caches.
 
 ## Editing
 
@@ -58,7 +58,7 @@ pauses. Test Results only shows the visible files while tests run, everything on
 Testing view supports run and coverage. Coverage shows line counts and timings; failures link to Strict source.
 
 Slow tests get a `slow` tag. **SCrunch: Show Slowest Tests** lists timings, **Show Tests for Line** finds covering tests,
-and **Time All Tests (without cache)** clears test caches before rerunning. Compiler, Bytecode and Runtime folders
+and **Time All Tests** tests every file, unchanged ones keep their last times. Compiler, Bytecode and Runtime folders
 run on demand by default.
 
 ## Compiler

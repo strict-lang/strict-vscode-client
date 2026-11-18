@@ -45,8 +45,9 @@ export function parseType(file: string, text: string): StrictType {
 			rest = rest.slice(close + 1);
 		}
 		const tests = method.tests.map((test) => test.expression);
+		const returns = rest.replace(/\s(slow|native)\s*$/, '').trim();
 		return {
-			name: methodName, header, line: method.lineNumber, endLine, returns: rest.trim().startsWith('=') ? '' : rest.trim(),
+			name: methodName, header, line: method.lineNumber, endLine, returns: returns.startsWith('=') ? '' : returns,
 			parameters: parameters.map((parameter) => {
 				const [parameterName, ...typeAndDefault] = parameter.split(' ');
 				const typeText = typeAndDefault.join(' ');

@@ -145,6 +145,10 @@ suite('scrunch discover', () => {
 		const list = parseType('List.strict', 'has elements');
 		assert.strictEqual(typeNamed('Slow(Numbers)', [number, list])?.type, list);
 		assert.strictEqual(isRunnableHeader('Run() Slow(Number)'), true);
+		const headers = ['Pending(files Texts, isMutating Boolean) Texts slow', 'Generated(model Text) Numbers native',
+			'Wait(seconds Number) slow', 'Slowest Number'];
+		assert.deepStrictEqual(parseType('Demo.strict', headers.join('\n\t1\n')).methods.map((found) => found.returns),
+			['Texts', 'Numbers', '', 'Number']);
 	});
 
 	test('isRunnableHeader treats missing or defaulted parameters as runnable', () => {

@@ -77,6 +77,29 @@ suite('native compiler', () => {
 			[[2, 1, undefined, undefined]]);
 	});
 
+	test('up to date native tests passed without running again, slow and native ones too', () => {
+		const source = `${adder}\nLoaded Number slow\n\tAdder.Loaded is 1\n\t1\nGenerated Number native\n\tAdder.Generated is 2\n\t2`;
+		const upToDate = { exitCode: 0, durationMs: 30, output: 'Tests up to date: Adder.strict (last changed 2026-11-18 00:46) < ' +
+			'Adder.test.exe (last build 2026-11-18 00:46)\n' };
+		assert.strictEqual(crashText(upToDate), undefined);
+		assert.deepStrictEqual(testResults(source, 'file:///Adder.strict', upToDate).map((result) => [result.lineNumber, result.state,
+			result.cached, result.consoleOutput]), [2, 3, 6, 9].map((line) => [line, 1, true, undefined]));
+		const unchanged = testResults(source, 'file:///Adder.strict', { exitCode: 0, durationMs: 30,
+			output: 'Built ./obj/Adder.test.exe, unchanged\nTest passed: Adder.Generated is 2 in Generated at Adder.strict:line 10 (0 ms)\n' +
+				'All tests passed in Adder.strict\n' });
+		assert.deepStrictEqual(unchanged.map((result) => [result.lineNumber, result.state, result.consoleOutput]), [[9, 1, undefined]]);
+	});
+
+	test('a slow test passing after more than 1 s on the VM failed, Strict says to mark its method native', () => {
+		const tooLong = 'Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 took 2202 ms on the VM, slow tests may take ' +
+			'1000 ms at most: mark the method native';
+		const results = testResults(adder, 'file:///Adder.strict', { exitCode: 1, durationMs: 2300,
+			output: `Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (2201.57 ms)\n${tooLong}\n` +
+				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4 (0.01 ms)\n1 tests failed in Adder.strict\n' });
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.message, result.durationMs]),
+			[[2, 0, tooLong, 2201.57], [3, 1, undefined, 0.01]]);
+	});
+
 	test('lineCounts are how often and how long each line ran, zero based', () => {
 		assert.deepStrictEqual(lineCounts('Built ./A.test.exe\nLine Examples/A.strict:8 executed 4 times in 1.25 ms (self 0.40 ms)\r\n' +
 			'Line Number.strict:40 executed 0 times in 0.00 ms (self -0.00 ms)\n', 'C:\\Strict'), [

@@ -79,6 +79,12 @@
       <array>
         <dict>
           <key>match</key>
+          <string>(?&lt;=\s)(slow|native)$</string>
+          <key>name</key>
+          <string>keyword.other.strict</string>
+        </dict>
+        <dict>
+          <key>match</key>
           <string>(Any|any|(Mutable)(\([^\)]*\))?)</string>
           <key>name</key>
           <string>keyword.other.strict</string>
