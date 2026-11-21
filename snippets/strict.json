@@ -62,12 +62,12 @@
 		],
 		"description": "Variable that really changes, like a loop counter"
 	},
-	"let": {
-		"prefix": "let",
+	"local": {
+		"prefix": "local",
 		"body": [
-			"let ${1:name} = ${0:value}"
+			"${1:name} = ${0:value}"
 		],
-		"description": "Variable that does not change, calculated once"
+		"description": "Local that does not change, calculated once"
 	},
 	"New type": {
 		"isFileTemplate": true,
