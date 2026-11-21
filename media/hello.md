@@ -3,7 +3,6 @@
 `Hello.strict`:
 
 ```strict
-has logger
 Run
 	logger.Log("Hello World")
 ```
@@ -15,4 +14,4 @@ strict Hello.strict
 Hello World
 ```
 
-A program starts in `Run`, `has logger` gives it a logger to write to the console.
+A program starts in `Run`. `logger` is the console logger, so `Run` can log without declaring a member.

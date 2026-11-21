@@ -11,11 +11,10 @@
 	"Run": {
 		"prefix": "run",
 		"body": [
-			"has logger",
 			"Run",
 			"\tlogger.Log(${1:\"Hello\"})$0"
 		],
-		"description": "Run method logging to the console, has logger belongs to the members at the top"
+		"description": "Run method. logger is the console logger and needs no member"
 	},
 	"for": {
 		"prefix": "for",
@@ -47,7 +46,7 @@
 		"body": [
 			"has ${1:width} ${0:Number}"
 		],
-		"description": "Member, leave out the type when the name says it: has number, has logger"
+		"description": "Member, leave out the type when the name says it: has number, has text"
 	},
 	"constant": {
 		"prefix": "constant",
