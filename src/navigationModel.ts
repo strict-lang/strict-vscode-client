@@ -13,7 +13,7 @@ export type Edit = { file: string; line: number; character: number; length: numb
 type Word = { character: number; word: string; dotted: boolean };
 
 const anyWord = '[A-Za-z_]\\w*';
-const reserved = new Set([...keywords, 'has', 'value', 'index', 'true', 'false']);
+const reserved = new Set([...keywords, 'has', 'value', 'index', 'logger', 'true', 'false']);
 const parsedSources = new WeakMap<Source, { own: StrictType; lines: string[] }>();
 
 /** What the word at character names, resolved like completion and hover do. */
@@ -101,7 +101,7 @@ function entryAt(text: string, word: Word, scope: Scope, line: number): Entry | 
 }
 
 /** Replaces the name in every hit (`cells` of the type Cell becomes `tiles`), an implicitly typed member or parameter keeps
- * its type: renaming `has logger` to output gives `has output Logger`. */
+ * its type: renaming `has textWriter` to output gives `has output TextWriter`. */
 export function renameEdits(target: Target, name: string, hits: Hit[]): Edit[] {
 	const declaration = target.isType ? undefined : implicitDeclaration(target);
 	const typed = declaration && name[0].toUpperCase() + name.slice(1) !== declaration.type ? ` ${declaration.type}` : '';
@@ -125,7 +125,7 @@ export function nameError(target: Target, name: string, types: StrictType[]): st
 		: [...membersOf({ type: target.owner }, types), ...target.method?.parameters ?? [],
 			...(target.method?.implementation ?? []).flatMap((line) => localOf(line) ?? [])].some((entry) => entry.name === name));
 	return !/^[A-Za-z][A-Za-z\d]{1,49}$/.test(name) || reserved.has(name)
-		? `${name} is no Strict name: 2-50 letters or digits, no keyword, value or index`
+		? `${name} is no Strict name: 2-50 letters or digits, no keyword, value, index or logger`
 		: target.isType && !/^[A-Z]/.test(name) ? `Type names start upper case: ${name}`
 		: taken ? `${name} already exists` : undefined;
 }

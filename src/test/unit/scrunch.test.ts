@@ -86,7 +86,7 @@ suite('scrunch discover', () => {
 	});
 
 	test('ignores has/constant/mutable lines as methods', () => {
-		const source = ['has logger', 'constant Pi = 3', 'Run', '\t5 is 5', '\tlogger.Log(Pi)'].join('\n');
+		const source = ['constant Pi = 3', 'Run', '\t5 is 5', '\tlogger.Log(Pi)'].join('\n');
 		const methods = discoverStrictTests(source);
 		assert.strictEqual(methods.length, 1);
 		assert.strictEqual(methods[0].name, 'Run');
@@ -120,7 +120,6 @@ suite('scrunch discover', () => {
 
 	test('methodsWithTests hides Run and keeps Greet', () => {
 		const source = [
-			'has logger',
 			'Run',
 			'\tconstant worldHelper = TextHelper("World")',
 			'\tlogger.Log(worldHelper.Greet)',
@@ -162,7 +161,6 @@ suite('scrunch discover', () => {
 
 	test('Run without tests is manual and only executes when requested explicitly', () => {
 		const methods = discoverStrictTests([
-			'has logger',
 			'Run',
 			'\tconstant worldHelper = TextHelper("World")',
 			'\tlogger.Log(worldHelper.Greet)'
@@ -190,19 +188,19 @@ suite('scrunch discover', () => {
 	});
 
 	test('tests never start with a member or parameter, a constant before a test belongs to the tests', () => {
-		const methods = discoverStrictTests(['has logger', 'Run', '\tlogger.Log("a is b")', '\tlogger.Log("c")',
+		const methods = discoverStrictTests(['Run', '\tlogger.Log("a is b")', '\tlogger.Log("c")',
 			'Digit Character', '\t5.Digit is "5"', '\tconstant invalid = Error', '\t10.Digit is invalid', '\t10.Random < 10',
 			'\tvalue is in Range(0, 10) then Character(value) else invalid'].join('\n'));
-		assert.deepStrictEqual(methods.map((method) => method.tests.map((test) => test.lineNumber)), [[], [5, 7, 8]]);
+		assert.deepStrictEqual(methods.map((method) => method.tests.map((test) => test.lineNumber)), [[], [4, 6, 7]]);
 		assert.strictEqual(methods[0].runnable && methods[0].tests.length === 0, true);
 	});
 
 	test('manualResults keep only the results of Run methods without tests, a new strict test replaces the others', () => {
-		const methods = discoverStrictTests(['has logger', 'Run', '\tlogger.Log("a")', 'Twice Number', '\tA.Twice is 2', '\t2']
+		const methods = discoverStrictTests(['Run', '\tlogger.Log("a")', 'Twice Number', '\tA.Twice is 2', '\t2']
 			.join('\n'));
-		const results = new Map<number, TestRunnerNotification>([[1, { lineNumber: 1, state: 1, methodName: 'Run' }],
-			[4, { lineNumber: 4, state: 0, methodName: 'Twice', expression: 'A.Twice is 2' }]]);
-		assert.deepStrictEqual([...manualResults(results, methods).keys()], [1]);
+		const results = new Map<number, TestRunnerNotification>([[0, { lineNumber: 0, state: 1, methodName: 'Run' }],
+			[3, { lineNumber: 3, state: 0, methodName: 'Twice', expression: 'A.Twice is 2' }]]);
+		assert.deepStrictEqual([...manualResults(results, methods).keys()], [0]);
 	});
 
 	test('groupByMethod keeps overloads apart by their header', () => {
@@ -404,8 +402,8 @@ suite('scrunch coverage', () => {
 	});
 
 	test('a crash paints the lines up to it red, crosses the crashing line and leaves the rest unpainted', () => {
-		const methods = discoverStrictTests(['has number', 'Value Number', '\tCrashing(3).Value is 4', '\tlet list = (1, 2)',
-			'\tlet bad = list(number)', '\tlet result = bad + 1', '\tresult'].join('\n'));
+		const methods = discoverStrictTests(['has number', 'Value Number', '\tCrashing(3).Value is 4', '\tlist = (1, 2)',
+			'\tbad = list(number)', '\tresult = bad + 1', '\tresult'].join('\n'));
 		const marks = (failure: Partial<TestRunnerNotification>) => lineCoverageMarks(methods, new Map([[2, { lineNumber: 2,
 			state: 0, expression: 'Crashing(3).Value is 4', methodName: 'Value', typeName: 'Crashing', ...failure }]]), new Set());
 		const crashed = marks({ actual: 'Error: Value', stackTrace: 'at Crashing.Value in Crashing.strict:line 5\n' +
@@ -433,20 +431,19 @@ suite('scrunch coverage', () => {
 	});
 
 	test('line counts of a coverage run never hide the lines of a Run program, tests do not call it', () => {
-		const methods = discoverStrictTests(['has logger', 'Run', '\tlogger.Log("Hi")'].join('\n'));
-		const results = new Map<number, TestRunnerNotification>([[1, { lineNumber: 1, state: 1, methodName: 'Run' }]]);
-		const counts = new Map([[2, { file: 'Hi.strict', line: 2, executions: 0, ms: 0, selfMs: 0 }]]);
-		assert.ok(lineCoverageMarks(methods, results, new Set(), counts).some((mark) => mark.lineNumber === 2));
+		const methods = discoverStrictTests(['Run', '\tlogger.Log("Hi")'].join('\n'));
+		const results = new Map<number, TestRunnerNotification>([[0, { lineNumber: 0, state: 1, methodName: 'Run' }]]);
+		const counts = new Map([[1, { file: 'Hi.strict', line: 1, executions: 0, ms: 0, selfMs: 0 }]]);
+		assert.ok(lineCoverageMarks(methods, results, new Set(), counts).some((mark) => mark.lineNumber === 1));
 	});
 
 	test('unrun manual Run is not painted from parse errors', () => {
 		const methods = discoverStrictTests([
-			'has logger',
 			'Run',
 			'\tconstant worldHelper = TextHelper("World")'
 		].join('\n'));
-		const marks = lineCoverageMarks(methods, new Map(), new Set([2]));
-		assert.strictEqual(marks.find((mark) => mark.lineNumber === 1), undefined);
+		const marks = lineCoverageMarks(methods, new Map(), new Set([1]));
+		assert.strictEqual(marks.find((mark) => mark.lineNumber === 0), undefined);
 	});
 });
 

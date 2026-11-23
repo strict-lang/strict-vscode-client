@@ -42,7 +42,7 @@ const ownLines = [
 	'has name Text',
 	'Scaled(factor Number) Text',
 	'\tOwn(Vector2(1, 2), "a").Scaled(2) is "1"',
-	'\tlet doubled = vector.Normalize',
+	'\tdoubled = vector.Normalize',
 	'\tfor digit in factor.digits',
 	'\t\tdoubled.X to Text'
 ];
@@ -70,7 +70,7 @@ suite('strict index', () => {
 	});
 
 	test('chainBefore takes the receiver expression in front of the cursor', () => {
-		assert.strictEqual(chainBefore('\tlet doubled = vector.Normalize'), 'vector.Normalize');
+		assert.strictEqual(chainBefore('\tdoubled = vector.Normalize'), 'vector.Normalize');
 		assert.strictEqual(chainBefore('\t1.7'), '1.7');
 		assert.strictEqual(chainBefore('\tif "hi there".Length'), '"hi there".Length');
 		assert.strictEqual(chainBefore('\tlogger.Log(Vector2(1, 2).Normalize'), 'Vector2(1, 2).Normalize');
@@ -107,6 +107,23 @@ suite('strict index', () => {
 		assert.strictEqual(isTrait(parseType('C:/Strict/Closeable.strict', 'Close')), true);
 		assert.strictEqual(isTrait(parseType('C:/Code/Rectangle.strict', 'has Width Number\nArea = Width * 2')), false);
 		assert.strictEqual(isTrait(parseType('C:/Code/Empty.strict', 'has number')), false);
+	});
+
+	test('a plain assignment is a let, a later assignment keeps the mutable, and logger is the console logger', () => {
+		const logger = parseType('C:/Strict/Logger.strict', 'Log(text)\n\ttext');
+		const recorder = parseType('C:/Code/Recorder.strict', 'Log(text)\n\ttext');
+		const lines = ['Run', '\ttotal = input + 5', '\tmutable count = 0', '\tcount = count + 1', '\tlogger.Log(total)',
+			'from(logger Recorder)', '\tlogger.Log("kept")'];
+		const program = parseType('C:/Code/Program.strict', lines.join('\n'));
+		const scope = scopeAt([program, logger, recorder, ...types], program, lines, 4, true);
+		assert.strictEqual(scope.locals.get('total')?.keyword, 'let');
+		assert.strictEqual(scope.locals.get('count')?.keyword, 'mutable');
+		assert.strictEqual(scope.locals.get('count')?.expression, '0');
+		assert.strictEqual(resolve('logger', scope)?.type.name, 'Logger');
+		assert.strictEqual(resolve('logger', scopeAt([program, logger, recorder], program, lines, 6))?.type.name, 'Recorder');
+		const computed = ['Next Number', '\tnext(add = 1) = 1', '\tnext'];
+		const owning = parseType('C:/Code/Computed.strict', computed.join('\n'));
+		assert.strictEqual(scopeAt([owning], owning, computed, 2).locals.has('next'), false);
 	});
 
 	test('callBefore finds the called chain and the index of the argument being typed', () => {

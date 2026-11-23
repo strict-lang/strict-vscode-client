@@ -13,7 +13,7 @@ export type DiscoveredMethod = {
 };
 
 const memberPrefix = /^(has|constant|mutable|implement)\b/;
-const implementationStart = /^(for |if |return |constant |mutable |let )/;
+const implementationStart = /^(?:for |if |return |constant |mutable )|^\w+ = /;
 const memberIdentifier = /\b(value|other)\b/;
 
 export function typeNameFromPath(filePath: string): string {

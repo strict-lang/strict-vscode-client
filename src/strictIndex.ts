@@ -19,7 +19,7 @@ export type Scope = { types: StrictType[]; own: StrictType; method?: StrictMetho
 const memberLine = /^(has|constant|mutable) (\S+)(?: (.*))?$/;
 const explicitType = /^[A-Z][\w/]*(\([^)]*\))?/;
 const skippedFolders = new Set(['node_modules', 'bin', 'obj', 'out']);
-export const keywords = new Set(['and', 'constant', 'else', 'for', 'from', 'if', 'in', 'is', 'let', 'mutable', 'not', 'or',
+export const keywords = new Set(['and', 'constant', 'else', 'for', 'from', 'if', 'in', 'is', 'mutable', 'not', 'or',
 	'return', 'then', 'to', 'with', 'xor']);
 
 export function parseType(file: string, text: string): StrictType {
@@ -105,10 +105,23 @@ export function typeNamed(typeText: string, types: StrictType[]): Resolved | und
 	return single && list ? { type: list, element: single.name } : undefined;
 }
 
-/** The local line declares: `let name = expression`, also with constant or mutable (members too), or `for name in`. */
+/** A declaration on this line: `name = expression` (a let), `constant` or `mutable`, or `for name in`. */
 export function localOf(line: string): { keyword: string; name: string; expression: string } | undefined {
-	const [, keyword, name, expression] = /^\t*(let|constant|mutable|for) (\w+) (?:=|in) (.+)$/.exec(line) ?? [];
-	return name ? { keyword, name, expression } : undefined;
+	const declared = /^\t*(constant|mutable|for) (\w+) (?:=|in) (.+)$/.exec(line);
+	if (declared) {
+		return { keyword: declared[1], name: declared[2], expression: declared[3] };
+	}
+	const assigned = /^\t*(\w+) = (.+)$/.exec(line);
+	return assigned ? { keyword: 'let', name: assigned[1], expression: assigned[2] } : undefined;
+}
+
+/** localOf when the line introduces that name. A later `name =` assigns a mutable, member, parameter or `logger`. */
+export function introducedLocal(line: string, scope: Scope): { keyword: string; name: string; expression: string } | undefined {
+	const local = localOf(line);
+	const known = local?.keyword === 'let' && (scope.locals.has(local.name) || local.name === 'value' || local.name === 'index' ||
+		local.name === 'logger' || scope.own.members.some((member) => member.name === local.name) ||
+		scope.method?.parameters.some((parameter) => parameter.name === local.name) === true);
+	return local && !known ? local : undefined;
 }
 
 /** Names known at line, its own declaration only withLine (hover and hints on it), not inside its initializer. */
@@ -123,7 +136,7 @@ export function scopeAt(types: StrictType[], own: StrictType, lines: string[], l
 		while (text && loops.length > 0 && loops[loops.length - 1].indent >= indent) {
 			loops.pop();
 		}
-		const local = localOf(text);
+		const local = introducedLocal(text, { types, own, method, locals, loops: iterables() });
 		if (local && (withLine || !isLine)) {
 			locals.set(local.name, { keyword: local.keyword, expression: local.expression, loops: iterables() });
 		} else if (!local && !isLine && /^\t+for\b/.test(text)) {
@@ -178,7 +191,8 @@ function resolveFirst(segment: string, scope: Scope, depth: number): Resolved | 
 	}
 	const declared = name === 'value' ? scope.own.name : name === 'index' ? 'Number' :
 		scope.method?.parameters.find((parameter) => parameter.name === name)?.type ??
-		scope.own.members.find((member) => member.name === name)?.type;
+		scope.own.members.find((member) => member.name === name)?.type ??
+		(name === 'logger' && scope.method ? 'Logger' : undefined);
 	const local = scope.locals.get(name);
 	const localType = local && resolve(local.expression, { ...scope, loops: local.loops }, depth + 1);
 	const value = declared !== undefined ? typeNamed(declared, scope.types) : local?.keyword === 'for'

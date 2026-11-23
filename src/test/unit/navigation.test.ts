@@ -14,8 +14,8 @@ const sources = [
 		'in(element Generic) Boolean', '\t2 is in (1, 2)', '\telements.Contains(element)'],
 	['C:/Strict/Iterator.strict', 'has length', 'for Iterator(Generic)', 'in(element Generic) Boolean'],
 	['C:/Strict/Logger.strict', 'has textWriter', 'Log(text)', '\ttextWriter.Write(text)'],
-	['C:/Code/Temperature.strict', 'has celsius Number', 'has logger', 'Limited(low Number, high Number) Number',
-		'\tTemperature(30).Limited(0, 20) is 20', '\tlet clamped = celsius.Clamp(low, high)', '\tlogger.Log("Clamp " + clamped)',
+	['C:/Code/Temperature.strict', 'has celsius Number', 'Limited(low Number, high Number) Number',
+		'\tTemperature(30).Limited(0, 20) is 20', '\tclamped = celsius.Clamp(low, high)', '\tlogger.Log("Clamp " + clamped)',
 		'\t(clamped - low).Absolute + low'],
 	['C:/Code/Cell.strict', 'has color Number', 'Brightness Number', '\tCell(5).Brightness is 5', '\tcolor'],
 	['C:/Code/Board.strict', 'has cells', 'has origin Code/Cell', 'Paint(cell) Cells',
@@ -40,32 +40,32 @@ suite('navigation', () => {
 	test('targetAt takes parameters and locals also where declared, members through receivers, types also from plurals', () => {
 		const describe = (found?: Target) => found && `${found.owner.name}.${found.name}${found.method ? ` in ${found.method.name}`
 			: ''}${found.isType ? ' type' : ''}`;
-		assert.deepStrictEqual([target('Temperature', 2, 9), target('Temperature', 4, 6), target('Temperature', 4, 25),
-			target('Temperature', 6, 20), target('Temperature', 1, 5), target('Game', 6, 6), target('Board', 2, 13),
-			target('Iterator', 2, 0), target('Temperature', 5, 15)].map(describe), ['Temperature.low in Limited',
-			'Temperature.clamped in Limited', 'Number.Clamp', 'Number.Absolute', 'Temperature.logger', 'Game.board', 'Cell.Cell type',
-			'Iterator.in', undefined]);
+		assert.deepStrictEqual([target('Temperature', 1, 9), target('Temperature', 3, 4), target('Temperature', 3, 20),
+			target('Temperature', 5, 20), target('Logger', 0, 5), target('Game', 6, 6), target('Board', 2, 13),
+			target('Iterator', 2, 0), target('Temperature', 4, 15)].map(describe), ['Temperature.low in Limited',
+			'Temperature.clamped in Limited', 'Number.Clamp', 'Number.Absolute', 'Logger.textWriter', 'Game.board',
+			'Cell.Cell type', 'Iterator.in', undefined]);
 	});
 
 	test('a local is renamed from its declaration on, never to the name of another local', () => {
-		const counter = { file: 'C:/Code/Counter.strict', text: ['has count Number', 'Next Number', '\tCounter(1).Next is 3',
-			'\tlet doubled = count * 2', '\tlet count = doubled + 1', '\tlet other = 2', '\tcount + other'].join('\n') };
+		const counter = { file: 'C:/Code/Counter.strict', text: ['has number', 'Next Number', '\tCounter(1).Next is 3',
+			'\tdoubled = number * 2', '\tcount = doubled + 1', '\tother = 2', '\tcount + other'].join('\n') };
 		const all = [...types, parseType(counter.file, counter.text)];
-		const local = targetAt(counter, all, 4, 6)!;
-		assert.deepStrictEqual(at(references(local, [...sources, counter], all)), ['Counter:4:5', 'Counter:6:1']);
+		const local = targetAt(counter, all, 4, 2)!;
+		assert.deepStrictEqual(at(references(local, [...sources, counter], all)), ['Counter:4:1', 'Counter:6:1']);
 		assert.strictEqual(nameError(local, 'other', all), 'other already exists');
 	});
 
 	test('references of a method are its declaration and the calls on its type, literals included, texts left out', () => {
 		const referenced = (owner: typeof number, name: string) => at(references({ name, owner }, sources, types));
-		assert.deepStrictEqual(referenced(number, 'Clamp'), ['Number:2:0', 'Number:3:5', 'Temperature:4:23']);
-		assert.deepStrictEqual(referenced(number, 'Absolute'), ['Number:5:0', 'Number:6:4', 'Temperature:6:17']);
+		assert.deepStrictEqual(referenced(number, 'Clamp'), ['Number:2:0', 'Number:3:5', 'Temperature:3:19']);
+		assert.deepStrictEqual(referenced(number, 'Absolute'), ['Number:5:0', 'Number:6:4', 'Temperature:5:17']);
 		assert.deepStrictEqual(referenced(text, 'Length'), ['Text:1:0', 'Text:2:6']);
 	});
 
 	test('references of a parameter stay inside its method', () => {
-		assert.deepStrictEqual(at(references(target('Temperature', 2, 9)!, sources, types)),
-			['Temperature:2:8', 'Temperature:4:29', 'Temperature:6:12', 'Temperature:6:28']);
+		assert.deepStrictEqual(at(references(target('Temperature', 1, 9)!, sources, types)),
+			['Temperature:1:8', 'Temperature:3:25', 'Temperature:5:12', 'Temperature:5:28']);
 	});
 
 	test('renaming a type renames plurals, generic and package uses and the members and parameters named after it', () => {
@@ -79,9 +79,8 @@ suite('navigation', () => {
 	});
 
 	test('renaming an implicitly typed member or parameter writes out the type it had', () => {
-		const member = rename(target('Temperature', 1, 5)!, 'output');
-		assert.deepStrictEqual([renamed(member, 'Temperature')[1], renamed(member, 'Temperature')[5]],
-			['has output Logger', '\toutput.Log("Clamp " + clamped)']);
+		const member = rename(target('Logger', 0, 5)!, 'output');
+		assert.deepStrictEqual(renamed(member, 'Logger'), ['has output TextWriter', 'Log(text)', '\toutput.Write(text)']);
 		const parameter = rename(target('Board', 2, 7)!, 'tile');
 		assert.deepStrictEqual([renamed(parameter, 'Board')[2], renamed(parameter, 'Board')[5]],
 			['Paint(tile Cell) Cells', '\tcells + painted + tile + "Cell"']);
@@ -91,13 +90,14 @@ suite('navigation', () => {
 		const type: Target = { name: 'Cell', owner: cell, isType: true };
 		assert.deepStrictEqual(['Tile', 'tile', 'Board', 'X', 'is', 'value', 'Ti_le', 'T'.repeat(51)].map((name) =>
 			nameError(type, name, types) === undefined), [true, false, false, false, false, false, false, false]);
-		assert.deepStrictEqual(['output', 'celsius'].map((name) =>
-			nameError({ name: 'logger', owner: temperature }, name, types) === undefined), [true, false]);
+		const logger = types.find((type) => type.name === 'Logger')!;
+		assert.deepStrictEqual(['output', 'Log'].map((name) =>
+			nameError({ name: 'textWriter', owner: logger }, name, types) === undefined), [true, false]);
 	});
 
 	test('typeAt is the type of the expression before the cursor, lists give their element type', () => {
-		assert.deepStrictEqual([typeAt(source('Temperature'), types, 2, 11), typeAt(source('Temperature'), types, 6, 9),
-			typeAt(source('Temperature'), types, 4, 28), typeAt(source('Temperature'), types, 5, 7),
+		assert.deepStrictEqual([typeAt(source('Temperature'), types, 1, 11), typeAt(source('Temperature'), types, 5, 9),
+			typeAt(source('Temperature'), types, 3, 24), typeAt(source('Temperature'), types, 4, 7),
 			typeAt(source('Board'), types, 0, 9)].map((type) => type?.name), ['Number', 'Number', 'Number', 'Logger', 'Cell']);
 	});
 
@@ -113,7 +113,7 @@ suite('navigation', () => {
 		const groups = callers(references({ name: 'Clamp', owner: number }, sources, types));
 		assert.deepStrictEqual(groups.map((group: Hit[]) => `${typeNameFromPath(group[0].file)}.${group[0].method?.name}${
 			group[0].isTest ? ' test' : ''}`), ['Number.Clamp test', 'Temperature.Limited']);
-		assert.deepStrictEqual(calls(source('Temperature'), 2, types).map((call) => `${call.entry.owner.name}.${call.entry.name}`),
+		assert.deepStrictEqual(calls(source('Temperature'), 1, types).map((call) => `${call.entry.owner.name}.${call.entry.name}`),
 			['Number.Clamp', 'Logger.Log', 'Number.Absolute']);
 	});
 });

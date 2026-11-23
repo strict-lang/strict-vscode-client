@@ -1,7 +1,7 @@
 import { sameType } from './implementations';
 import { normalizeFsPath } from './paths';
 import {
-	callBefore, chainBefore, Entry, isTrait, localOf, membersOf, resolve, Resolved, Scope, scopeAt, StrictMethod,
+	callBefore, chainBefore, Entry, introducedLocal, isTrait, membersOf, resolve, Resolved, Scope, scopeAt, StrictMethod,
 	StrictType, typeNamed
 } from './strictIndex';
 
@@ -14,16 +14,17 @@ type Call = { callee: string; start: number; written: Array<{ start: number; tex
 const literal = /^(-?\d+(\.\d+)?|"(?:[^"\\]|\\.)*"|true|false|\(.*\))$/;
 const names = /"(?:[^"\\]|\\.)*"|\d+(?:\.\d+)?|([A-Za-z_]\w*)/g;
 
-/** `: Type` after `let`, `constant`, `mutable` and `for x in` names, the parameter or member name before a literal argument
- * like `Clamp(minimum: 0.5)`. */
+/** `: Type` after a let (`name =`), `constant`, `mutable` and `for x in` names, the parameter or member name before a literal
+ * argument like `Clamp(minimum: 0.5)`. */
 export function inlayHints(lines: string[], own: StrictType, types: StrictType[], from = 0, to = lines.length - 1): Hint[] {
 	return lines.slice(from, to + 1).flatMap((text, offset) => {
 		const line = from + offset;
 		const scope = scopeAt(types, own, lines, line, true);
-		const declared = localOf(text);
+		const declared = introducedLocal(text, scopeAt(types, own, lines, line));
 		const local = declared && resolve(declared.name, scope);
-		const end = declared ? text.indexOf(`${declared.keyword} ${declared.name}`) + declared.keyword.length + declared.name.length + 1
-			: 0;
+		const head = declared ? declared.keyword === 'let' ? declared.name : `${declared.keyword} ${declared.name}` : '';
+		const at = declared ? text.indexOf(head) : -1;
+		const end = at < 0 ? 0 : at + head.length;
 		return [...local ? [{ line, character: end, label: `: ${typeText(local)}`, parameter: false }] : [],
 			...calls(text).flatMap((call) => {
 				const methods = calledMethods(call.callee, scope).filter((method) =>
@@ -65,7 +66,8 @@ function tokenOf(name: string, before: string, scope: Scope, ownEntries: Entry[]
 	const type = /^[A-Z]/.test(name) ? typeNamed(name, scope.types)?.type : undefined;
 	return scope.method?.parameters.some((parameter) => parameter.name === name) ? ['parameter']
 		: local ? ['variable', ...local.keyword === 'mutable' ? ['mutable'] : local.keyword === 'for' ? [] : ['readonly']]
-		: entry ? entryToken(entry) : type ? ['type', ...isInside(type.file, root) ? ['defaultLibrary'] : []] : undefined;
+		: entry ? entryToken(entry) : name === 'logger' && scope.method ? ['variable', 'readonly']
+		: type ? ['type', ...isInside(type.file, root) ? ['defaultLibrary'] : []] : undefined;
 }
 
 function entryToken(entry: Entry): string[] {

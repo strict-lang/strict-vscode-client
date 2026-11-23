@@ -12,11 +12,11 @@ const shiftsLines = [
 	'mutable count Number',
 	'Shifted(offset Number) Number',
 	'\tShifts((1, 2)).Shifted(1) is 2',
-	'\tlet clamped = offset.Clamp(0.5, 1.5)',
+	'\tclamped = offset.Clamp(0.5, 1.5)',
 	'\tmutable total = Limit',
 	'\tfor digit in Range(0, 3)',
 	'\t\ttotal = clamped.Clamp(digit, 2)',
-	'\tlet unknown = missing.Call(1)',
+	'\tunknown = missing.Call(1)',
 	'\ttotal + count + numbers.First'
 ];
 const shifts = parseType('C:/Code/Shifts.strict', shiftsLines.join('\n'));
@@ -25,7 +25,7 @@ const all = [shifts, ...types, iterator, boolean];
 suite('insight', () => {
 	test('inlayHints show types of locals and loop variables, parameter and member names before literal arguments', () => {
 		assert.deepStrictEqual(inlayHints(shiftsLines, shifts, all).map((hint) => `${hint.line}:${hint.character} ${hint.label}`), [
-			'1:14 : Number', '4:8 numbers:', '4:24 offset:', '5:12 : Number', '5:28 minimum:', '5:33 maximum:', '6:14 : Number',
+			'1:14 : Number', '4:8 numbers:', '4:24 offset:', '5:8 : Number', '5:24 minimum:', '5:29 maximum:', '6:14 : Number',
 			'7:10 : Number', '7:20 Start:', '7:23 ExclusiveEnd:', '8:31 maximum:'
 		]);
 	});
@@ -56,7 +56,7 @@ suite('insight', () => {
 
 	test('expectedType is the parameter type around the cursor or the return type on the last line, fits compares with it', () => {
 		const scope = (line: number) => scopeAt(all, shifts, shiftsLines, line);
-		assert.deepStrictEqual([expectedType('\tShifts(', scope(4), 4), expectedType('\tlet x = ', scope(5), 5),
+		assert.deepStrictEqual([expectedType('\tShifts(', scope(4), 4), expectedType('\tx = ', scope(5), 5),
 			expectedType('\ttotal + ', scope(10), 10)], ['Numbers', undefined, 'Number']);
 		const fitting = (expected: string) => ['offset', 'numbers', 'numbers.First', 'true', 'Shifts'].filter((name) =>
 			fits(name, expected, scope(9)));

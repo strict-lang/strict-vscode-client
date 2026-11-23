@@ -41,8 +41,7 @@ export function ruleFix(rule: string, lines: string[], line: number, target: str
 			return call ? callFix(lines, line, call) : undefined;
 		case 'UnusedMethodVariableMustBeRemoved':
 		case 'UnusedMemberMustBeRemoved':
-			return /^\s*(?:has|let|mutable|constant) (\w+)\b/.exec(text)?.[1] === target ? removedLine(lines, line, target)
-				: undefined;
+			return declaredName(text) === target ? removedLine(lines, line, target) : undefined;
 		case 'EmptyLineInsideMethod':
 			return { ...removedLine(lines, line, ''), title: 'Remove empty line' };
 		case 'UnusedMethodParameterMustBeRemoved':
@@ -54,12 +53,12 @@ export function ruleFix(rule: string, lines: string[], line: number, target: str
 	}
 }
 
-/** Fixes that never change what code does, for Fix All: a let becomes constant, a never changed mutable a let. */
+/** Fixes that never change what code does, for Fix All: a let becomes constant, a never changed mutable becomes a let. */
 export function safeFixes(lines: string[], issues: Issue[]): Edit[] {
 	const fixed = new Map<number, string>();
 	for (const issue of issues.filter((candidate) => candidate.line < lines.length && (candidate.rule === safeMutable ||
 		candidate.rule === isTrueRule ||
-		candidate.rule === 'UseConstantHere' && /^\s+let /.test(lines[candidate.line])))) {
+		candidate.rule === 'UseConstantHere' && isPlainLet(lines[candidate.line])))) {
 		const text = fixedLine(issue.rule, fixed.get(issue.line) ?? lines[issue.line], issue.target);
 		if (text !== undefined) {
 			fixed.set(issue.line, text);
@@ -71,13 +70,23 @@ export function safeFixes(lines: string[], issues: Issue[]): Edit[] {
 /** text fixed for one of the safe rules, undefined for other rules or when text does not declare target. */
 function fixedLine(rule: string, text: string, target: string, unit = 4): string | undefined {
 	const fixed = rule === 'ExtraWhitespacesFoundAtBeginningOfLine' ? withTabs(text, unit)
-		: rule === 'UseConstantHere' ? text.replace(/^(\s*)(?:let|has) (\w+)\b/, (all, indent, name) =>
+		: rule === 'UseConstantHere' ? text.replace(/^(\s*)(?:has )?(\w+)(?= =)/, (all, indent, name) =>
 			name === target ? `${indent}constant ${name}` : all)
 		: rule === safeMutable ? text.replace(/^(\s*)mutable (\w+)\b/, (all, indent, name) =>
-			name === target ? `${indent}let ${name}` : all)
+			name === target ? `${indent}${name}` : all)
 		: rule === isTrueRule ? text.replace(/^(\s*)(.+) is true$/, (all, indent, code) =>
 			target === code || target.startsWith(`${code}, `) ? indent + code : all) : text;
 	return fixed === text ? undefined : fixed;
+}
+
+/** `has`/`constant`/`mutable name`, or a let `name = expression`. */
+function declaredName(text: string): string | undefined {
+	return /^\s*(?:has|mutable|constant) (\w+)\b/.exec(text)?.[1] ?? /^\s*(\w+) = /.exec(text)?.[1];
+}
+
+/** An indented let: `name = expression`, not a `constant`, `mutable`, `has` or `for`. */
+function isPlainLet(text: string): boolean {
+	return /^\s+\w+ = /.test(text) && !/^\s*(?:constant|mutable|has|for)\b/.test(text);
 }
 
 function removedLine(lines: string[], line: number, name: string): Fix {

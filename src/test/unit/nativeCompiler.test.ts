@@ -9,7 +9,6 @@ import {
 import { isIgnoredBy } from '../../paths';
 
 const adder = [
-	'has logger',
 	'Add(first Number, second Number) Number',
 	'\tAdder.Add(1, 2) is 4',
 	'\tAdder.Add(2, 2) is 4',
@@ -37,9 +36,9 @@ suite('native compiler', () => {
 		const results = testResults(adder, 'file:///Adder.strict', {
 			exitCode: 1, durationMs: 30,
 			output: 'Test failed: Adder.Add(1, 2) is 4 in Add\n  got: 3\n' +
-				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4 (0.01 ms)\n1 tests failed in Adder.strict\n'
+				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 3 (0.01 ms)\n1 tests failed in Adder.strict\n'
 		});
-		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 0], [3, 1]]);
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[1, 0], [2, 1]]);
 		assert.strictEqual(results[0].expected, '4');
 		assert.strictEqual(results[0].actual, '3');
 		assert.strictEqual(results[0].methodName, 'Add');
@@ -48,10 +47,10 @@ suite('native compiler', () => {
 	test('testResults maps a failure with its location to the test on that line', () => {
 		const results = testResults(adder, 'file:///Adder.strict', {
 			exitCode: 1, durationMs: 30,
-			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.01 ms)\n' +
-				'Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4\n  got: 5\n1 tests failed in Adder.strict\n'
+			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (0.01 ms)\n' +
+				'Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 3\n  got: 5\n1 tests failed in Adder.strict\n'
 		});
-		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 1], [3, 0]]);
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[1, 1], [2, 0]]);
 		assert.strictEqual(results[1].actual, '5');
 		assert.strictEqual(results[1].consoleOutput, undefined);
 	});
@@ -59,22 +58,22 @@ suite('native compiler', () => {
 	test('testResults report only the lines Strict printed, a line it did not print is no test', () => {
 		const results = testResults(adder, 'file:///Adder.strict', {
 			exitCode: 0, durationMs: 30,
-			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.02 ms)\nAll tests passed in Adder.strict\n'
+			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (0.02 ms)\nAll tests passed in Adder.strict\n'
 		});
-		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.durationMs]), [[2, 1, 0.02]]);
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.durationMs]), [[1, 1, 0.02]]);
 	});
 
 	test('testResults pass every discovered test of a cached type, Strict printed only its summary', () => {
 		const results = testResults(adder, 'file:///Adder.strict', { exitCode: 0, durationMs: 30, output: 'All tests passed in Adder.strict\n' });
-		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.cached]), [[2, 1, true], [3, 1, true]]);
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.cached]), [[1, 1, true], [2, 1, true]]);
 	});
 
 	test('testResults of a lines run are no crash, its build and line counts are no console output', () => {
 		const results = testResults(adder, 'file:///Adder.strict', { exitCode: 0, durationMs: 900, output: 'Built ./Adder.test.exe\n' +
-			'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.02 ms)\n' +
+			'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (0.02 ms)\n' +
 			'Line Adder.strict:5 executed 1 times in 0.01 ms (self 0.01 ms)\nAll tests passed in Adder.strict\n' });
 		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.consoleOutput, result.message]),
-			[[2, 1, undefined, undefined]]);
+			[[1, 1, undefined, undefined]]);
 	});
 
 	test('up to date native tests passed without running again, slow and native ones too', () => {
@@ -83,21 +82,21 @@ suite('native compiler', () => {
 			'Adder.test.exe (last build 2026-11-18 00:46)\n' };
 		assert.strictEqual(crashText(upToDate), undefined);
 		assert.deepStrictEqual(testResults(source, 'file:///Adder.strict', upToDate).map((result) => [result.lineNumber, result.state,
-			result.cached, result.consoleOutput]), [2, 3, 6, 9].map((line) => [line, 1, true, undefined]));
+			result.cached, result.consoleOutput]), [1, 2, 5, 8].map((line) => [line, 1, true, undefined]));
 		const unchanged = testResults(source, 'file:///Adder.strict', { exitCode: 0, durationMs: 30,
-			output: 'Built ./obj/Adder.test.exe, unchanged\nTest passed: Adder.Generated is 2 in Generated at Adder.strict:line 10 (0 ms)\n' +
+			output: 'Built ./obj/Adder.test.exe, unchanged\nTest passed: Adder.Generated is 2 in Generated at Adder.strict:line 9 (0 ms)\n' +
 				'All tests passed in Adder.strict\n' });
-		assert.deepStrictEqual(unchanged.map((result) => [result.lineNumber, result.state, result.consoleOutput]), [[9, 1, undefined]]);
+		assert.deepStrictEqual(unchanged.map((result) => [result.lineNumber, result.state, result.consoleOutput]), [[8, 1, undefined]]);
 	});
 
 	test('a slow test passing after more than 1 s on the VM failed, Strict says to mark its method native', () => {
-		const tooLong = 'Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 took 2202 ms on the VM, slow tests may take ' +
+		const tooLong = 'Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 took 2202 ms on the VM, slow tests may take ' +
 			'1000 ms at most: mark the method native';
 		const results = testResults(adder, 'file:///Adder.strict', { exitCode: 1, durationMs: 2300,
-			output: `Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (2201.57 ms)\n${tooLong}\n` +
-				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4 (0.01 ms)\n1 tests failed in Adder.strict\n' });
+			output: `Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (2201.57 ms)\n${tooLong}\n` +
+				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 3 (0.01 ms)\n1 tests failed in Adder.strict\n' });
 		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.message, result.durationMs]),
-			[[2, 0, tooLong, 2201.57], [3, 1, undefined, 0.01]]);
+			[[1, 0, tooLong, 2201.57], [2, 1, undefined, 0.01]]);
 	});
 
 	test('lineCounts are how often and how long each line ran, zero based', () => {
@@ -189,8 +188,8 @@ suite('native compiler', () => {
 	test('testResults take the duration Strict prints after a test', () => {
 		const results = testResults(adder, 'file:///Adder.strict', {
 			exitCode: 1, durationMs: 40,
-			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.02 ms)\n' +
-				'Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4 (12.5 ms)\n  got: 5\n1 tests failed in Adder.strict\n'
+			output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (0.02 ms)\n' +
+				'Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 3 (12.5 ms)\n  got: 5\n1 tests failed in Adder.strict\n'
 		});
 		assert.deepStrictEqual(results.map((result) => [result.state, result.durationMs]), [[1, 0.02], [0, 12.5]]);
 		assert.strictEqual(results[1].actual, '5');
@@ -211,17 +210,17 @@ suite('native compiler', () => {
 
 	test('testResults keeps the stack Strict prints after got with its failed test', () => {
 		const results = testResults(adder, 'file:///Adder.strict', {
-			exitCode: 1, durationMs: 30, output: 'Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.02 ms)\n' +
-				'  got: Error: Add\n\tat Adder.Add in Adder.strict:line 5\n\tat Adder.$Tests in Adder.strict:line 3\n' +
+			exitCode: 1, durationMs: 30, output: 'Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (0.02 ms)\n' +
+				'  got: Error: Add\n\tat Adder.Add in Adder.strict:line 4\n\tat Adder.$Tests in Adder.strict:line 2\n' +
 				'1 tests failed in Adder.strict\n'
 		});
 		assert.deepStrictEqual([results[0].actual, results[0].stackTrace, results[0].consoleOutput],
-			['Error: Add', 'at Adder.Add in Adder.strict:line 5\nat Adder.$Tests in Adder.strict:line 3', undefined]);
+			['Error: Add', 'at Adder.Add in Adder.strict:line 4\nat Adder.$Tests in Adder.strict:line 2', undefined]);
 	});
 
 	test('testResults keeps the tests that passed before Strict crashed', () => {
 		const results = testResults(adder, 'file:///Adder.strict', {
-			exitCode: 3221225477, durationMs: 30, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\n'
+			exitCode: 3221225477, durationMs: 30, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2\n'
 		});
 		assert.deepStrictEqual(results.map((result) => result.state), [1, 0]);
 		assert.strictEqual(results[0].message, undefined);
@@ -231,28 +230,28 @@ suite('native compiler', () => {
 
 	test('testResults names the test that timed out instead of a crash, the later tests did not run', () => {
 		const results = testResults(threeTests, 'file:///Adder.strict', {
-			exitCode: -1, durationMs: 60000, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\nTimed out after 60 s'
+			exitCode: -1, durationMs: 60000, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2\nTimed out after 60 s'
 		});
-		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 1], [3, 0]]);
-		assert.strictEqual(results[1].message, 'Timed out after 60 s in Adder.Add(2, 2) is 4 (line 4), later tests did not run');
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[1, 1], [2, 0]]);
+		assert.strictEqual(results[1].message, 'Timed out after 60 s in Adder.Add(2, 2) is 4 (line 3), later tests did not run');
 	});
 
 	test('testResults of a run stopped at an over budget test fail only that test, the later tests did not run', () => {
-		const run = { exitCode: 1, durationMs: 300, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (0.02 ms)\n' +
-			`Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4\n  got: ${overBudget}\n` };
+		const run = { exitCode: 1, durationMs: 300, output: 'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (0.02 ms)\n' +
+			`Test failed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 3\n  got: ${overBudget}\n` };
 		const results = testResults(threeTests, 'file:///Adder.strict', run);
-		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.expected]), [[2, 1, undefined],
-			[3, 0, undefined]]);
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state, result.expected]), [[1, 1, undefined],
+			[2, 0, undefined]]);
 		assert.strictEqual(results[1].message, `${overBudget}, the tests after it did not run`);
 		assert.strictEqual(crashText(run), undefined);
 	});
 
 	test('testResults keep the failure of a test Strict reported again as passed after its budget ran out', () => {
 		const results = testResults(adder, 'file:///Adder.strict', { exitCode: 0, durationMs: 3000,
-			output: `Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3\n  got: ${overBudget}\n` +
-				'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 3 (2036.06 ms)\n' +
-				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 4 (0.1 ms)\nAll tests passed in Adder.strict\n' });
-		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[2, 0], [3, 1]]);
+			output: `Test failed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2\n  got: ${overBudget}\n` +
+				'Test passed: Adder.Add(1, 2) is 4 in Add at Adder.strict:line 2 (2036.06 ms)\n' +
+				'Test passed: Adder.Add(2, 2) is 4 in Add at Adder.strict:line 3 (0.1 ms)\nAll tests passed in Adder.strict\n' });
+		assert.deepStrictEqual(results.map((result) => [result.lineNumber, result.state]), [[1, 0], [2, 1]]);
 	});
 
 	test('testProcesses use the configured count or half the cores while focused, one in the background', () => {
@@ -307,12 +306,12 @@ suite('native compiler', () => {
 	test('checkIssues reads file, zero based line, rule and target of each issue line', () => {
 		const issues = checkIssues([
 			'Examples\\Bad.strict:line 4: ExtraWhitespacesFoundAtBeginningOfLine: indent with tabs',
-			'Examples/Bad.strict:line 1: UnusedMemberMustBeRemoved: logger',
+			'Examples/Bad.strict:line 1: UnusedMemberMustBeRemoved: width',
 			'Validation issues: 2'
 		].join('\n'), 'C:\\Strict');
 		assert.deepStrictEqual(issues.map((issue) => [issue.line, issue.rule, issue.target]), [
 			[3, 'ExtraWhitespacesFoundAtBeginningOfLine', 'indent with tabs'],
-			[0, 'UnusedMemberMustBeRemoved', 'logger']
+			[0, 'UnusedMemberMustBeRemoved', 'width']
 		]);
 		assert.strictEqual(issues[0].file, path.resolve('C:\\Strict', 'Examples', 'Bad.strict'));
 	});

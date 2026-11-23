@@ -71,9 +71,9 @@ suite('tasks', () => {
 	});
 
 	test('runMethods are the Run methods without tests, Run(numbers) needs arguments', () => {
-		const source = ['has logger', 'Run(position Number) Number', '\tGray.Run(0) is 0', '\tposition', 'Run(numbers)',
+		const source = ['Run(position Number) Number', '\tGray.Run(0) is 0', '\tposition', 'Run(numbers)',
 			'\tlogger.Log(numbers)'].join('\n');
-		assert.deepStrictEqual(runMethods(source).map((method) => [method.lineNumber, method.runnable]), [[4, false]]);
+		assert.deepStrictEqual(runMethods(source).map((method) => [method.lineNumber, method.runnable]), [[3, false]]);
 	});
 
 	test('detectedTasks test and check the folder, build the current file and run every program without arguments', () => {
@@ -81,10 +81,10 @@ suite('tasks', () => {
 			fs.mkdirSync(path.dirname(path.join(tempRoot, file)), { recursive: true });
 			fs.writeFileSync(path.join(tempRoot, file), lines.join('\n'));
 		};
-		write('Hello.strict', ['has logger', 'Run', '\tlogger.Log("Hi")']);
-		write('Sum.strict', ['has logger', 'Run(numbers)', '\tlogger.Log(numbers.Sum)']);
-		write('Tested.strict', ['has logger', 'Run', '\t5 is 5', '\tlogger.Log(5)']);
-		write(path.join('Shapes', 'Square.strict'), ['has logger', 'Run', '\tlogger.Log(4)']);
+		write('Hello.strict', ['Run', '\tlogger.Log("Hi")']);
+		write('Sum.strict', ['Run(numbers)', '\tlogger.Log(numbers.Sum)']);
+		write('Tested.strict', ['Run', '\t5 is 5', '\tlogger.Log(5)']);
+		write(path.join('Shapes', 'Square.strict'), ['Run', '\tlogger.Log(4)']);
 		const names = detectedTasks(tempRoot, path.join(tempRoot, 'Sum.strict')).map((task) => [task.command, task.file]);
 		assert.deepStrictEqual(names.sort(), [[undefined, 'Hello.strict'], [undefined, path.join('Shapes', 'Square.strict')],
 			['build', 'Sum.strict'], ['check', '.'], ['test', '.']].sort());

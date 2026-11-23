@@ -4,8 +4,8 @@ import { Fix, issueTarget, renamedPositions, ruleFix, safeFixes, typeFixes } fro
 import { parseType } from '../../strictIndex';
 import { list, number, text, vector } from './strictIndex.test';
 
-const rules = ['has total = 17 + 4', 'Add(first Number) Number', '\tRules(1).Add(1) is 23', '\tlet five = 5',
-	'    mutable count = first', '\tlet unused = first + 1', '    first + count + five + total'];
+const rules = ['has total = 17 + 4', 'Add(first Number) Number', '\tRules(1).Add(1) is 23', '\tfive = 5',
+	'    mutable count = first', '\tunused = first + 1', '    first + count + five + total'];
 const edited = (fix: Fix | undefined) => fix?.edits.map((edit) => [...edit.range, edit.text]);
 
 suite('fixes', () => {
@@ -14,7 +14,7 @@ suite('fixes', () => {
 		assert.strictEqual(fixed('UseConstantHere', 3, issueTarget(formatDiagnosticMessage('UseConstantHere', 'five'))),
 			'\tconstant five = 5');
 		assert.strictEqual(fixed('UseConstantHere', 0, 'total'), 'constant total = 17 + 4');
-		assert.strictEqual(fixed('VariableDeclaredAsMutableButValueNeverChanged', 4, 'count'), '    let count = first');
+		assert.strictEqual(fixed('VariableDeclaredAsMutableButValueNeverChanged', 4, 'count'), '    count = first');
 		assert.strictEqual(fixed('ExtraWhitespacesFoundAtBeginningOfLine', 6, 'indent with tabs'), '\tfirst + count + five + total');
 		assert.strictEqual(fixed('UseConstantHere', 4, 'five'), undefined);
 		assert.strictEqual(fixed('EmptyLineIsNotAllowed', 4, ''), undefined);
@@ -36,7 +36,7 @@ suite('fixes', () => {
 			{ rule: 'UseConstantHere', line: 3, target: 'five' },
 			{ rule: 'UseConstantHere', line: 0, target: 'total' },
 			{ rule: 'UnusedMethodVariableMustBeRemoved', line: 5, target: 'unused' }
-		]).map((edit) => [...edit.range, edit.text]), [[4, 0, 4, 25, '    let count = first'], [3, 0, 3, 13, '\tconstant five = 5']]);
+		]).map((edit) => [...edit.range, edit.text]), [[4, 0, 4, 25, '    count = first'], [3, 0, 3, 9, '\tconstant five = 5']]);
 	});
 
 	test('ruleFix removes unused variables and members with their line, a parameter only when no call passes it', () => {
@@ -54,11 +54,11 @@ suite('fixes', () => {
 	});
 
 	test('renamedPositions are the whole words of a parameter or local in its method, of a member in the file', () => {
-		const lines = ['has count Number', 'Add(amount Number) Number', '\tRules(1).Add(2) is 3', '\tlet total = amount + count',
+		const lines = ['has count Number', 'Add(amount Number) Number', '\tRules(1).Add(2) is 3', '\ttotal = amount + count',
 			'\ttotal', 'Twice Number', '\tRules(1).Twice is 2', '\tlogger.Log("count" + amount)', '\tcount * 2'];
-		assert.deepStrictEqual(renamedPositions(lines, 1, 'amount'), [[1, 4], [3, 13]]);
-		assert.deepStrictEqual(renamedPositions(lines, 4, 'total'), [[3, 5], [4, 1]]);
-		assert.deepStrictEqual(renamedPositions(lines, 0, 'count'), [[0, 4], [3, 22], [8, 1]]);
+		assert.deepStrictEqual(renamedPositions(lines, 1, 'amount'), [[1, 4], [3, 9]]);
+		assert.deepStrictEqual(renamedPositions(lines, 4, 'total'), [[3, 1], [4, 1]]);
+		assert.deepStrictEqual(renamedPositions(lines, 0, 'count'), [[0, 4], [3, 18], [8, 1]]);
 	});
 
 	test('ruleFix renames a list prefixed name to the plural of its list type, other names are renamed by the user', () => {
@@ -91,7 +91,7 @@ suite('fixes', () => {
 	});
 
 	test('typeFixes use the method strict check reports as copied, called like copiedFrom calls it', () => {
-		const body = ['\tlet squared = number * number * factor', '\tsquared * squared / factor / factor'];
+		const body = ['\tsquared = number * number * factor', '\tsquared * squared / factor / factor'];
 		const beta = parseType('C:/Code/Beta.strict', ['has number', 'SquareTwice(factor Number) Number',
 			'\tBeta(2).SquareTwice(3) is 16', ...body].join('\n'));
 		const lines = ['has number', 'SquareTwice(factor Number) Number', '\tAlpha(2).SquareTwice(3) is 16', ...body];

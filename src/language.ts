@@ -125,10 +125,13 @@ export class StrictLanguage implements vscode.Disposable {
 				: [...keywordItems, ...typeItems];
 		}
 		const ownMembers = membersOf({ type: scope.own }, scope.types).filter((entry) => entry.owner === scope.own);
+		const hasLogger = scope.method?.parameters.some((parameter) => parameter.name === 'logger') === true ||
+			scope.own.members.some((member) => member.name === 'logger');
 		return ranked([
 			...(scope.method?.parameters ?? []).map((parameter) =>
 				item(parameter.name, vscode.CompletionItemKind.Variable, `${parameter.name} ${parameter.type}`, '0')),
 			...[...scope.locals.keys()].map((name) => item(name, vscode.CompletionItemKind.Variable, 'local', '0')),
+			...scope.method && !hasLogger ? [item('logger', vscode.CompletionItemKind.Variable, 'logger Logger', '0')] : [],
 			...ownMembers.map((entry) => entryItem(entry)),
 			...['value', 'index', 'true', 'false', ...keywords].map((name) => item(name, vscode.CompletionItemKind.Keyword, '', '3')),
 			...typeItems
@@ -152,9 +155,9 @@ export class StrictLanguage implements vscode.Disposable {
 		}
 		const parameter = scope.method?.parameters.find((candidate) => candidate.name === word);
 		const local = scope.locals.get(word);
-		if (!parameter && !local && scope.method && (word === 'value' || word === 'index')) {
+		if (!parameter && !local && scope.method && (word === 'value' || word === 'index' || word === 'logger')) {
 			const type = resolve(word, scope);
-			return type && { range, entries: [], text: `${word} ${typeText(type)}` };
+			return type && { range, entries: [], text: `${word} ${typeText(type)}`, type: word === 'logger' ? type.type : undefined };
 		}
 		const type = local && resolve(word, scope);
 		const lines = document.getText().split(/\r?\n/);

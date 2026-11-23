@@ -13,7 +13,7 @@ type Value = { name: string; type: string };
 
 const tokenPattern = /"(?:[^"\\]|\\.)*"|\d+(?:\.\d+)?|[A-Za-z_]\w*|\S/g;
 const literalPattern = /"(?:[^"\\]|\\.)*"|-?\b\d+(?:\.\d+)?\b/g;
-const implementationStart = /^(for|if|return|constant|mutable|let)\b/;
+const implementationStart = /^(?:for|if|return|constant|mutable)\b|^\w+ = /;
 const wordOperators = new Set(['and', 'or', 'xor', 'is']);
 const minimumCopyTokens = 12;
 const maximumCandidates = 32;

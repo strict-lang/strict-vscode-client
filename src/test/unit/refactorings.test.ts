@@ -9,9 +9,9 @@ const shapeLines = [
 	'constant Limit = 3',
 	'Total(factor Number) Number',
 	'\tShape((1, 2)).Total(2) is 6',
-	'\tlet first = numbers(0)',
-	'\tlet second = first * factor',
-	'\tlet third = second + numbers(1)',
+	'\tfirst = numbers(0)',
+	'\tsecond = first * factor',
+	'\tthird = second + numbers(1)',
 	'\tthird * third + Limit * 2'
 ];
 const gizmoLines = [
@@ -48,7 +48,7 @@ const crash = (error: string) => `Strict crashed with exit code 1\n${error}`;
 suite('refactorings', () => {
 	test('extractToLet declares the selected expression above its line, as constant when it only uses constants', () => {
 		assert.deepStrictEqual(extracted(4, 'numbers(0)'),
-			['Extract to let number', '\tlet number = numbers(0)', '\tlet first = number']);
+			['Extract to let number', '\tnumber = numbers(0)', '\tfirst = number']);
 		assert.deepStrictEqual(extracted(7, ' Limit * 2'),
 			['Extract to constant extracted', '\tconstant extracted = Limit * 2', '\tthird * third + extracted']);
 		for (const [line, selected] of [[3, 'Shape((1, 2))'], [4, 'umbers(0)'], [4, 'numbers(0'], [7, '* third'], [2, 'Number']]) {
@@ -60,13 +60,13 @@ suite('refactorings', () => {
 	});
 
 	test('inlineLet replaces the only later use with the value, bracketed inside other expressions', () => {
-		assert.deepStrictEqual(inlined(4), ['Inline first', '\tlet second = numbers(0) * factor',
-			'\tlet third = second + numbers(1)', '\tthird * third + Limit * 2']);
-		assert.deepStrictEqual(inlined(5), ['Inline second', '\tlet first = numbers(0)',
-			'\tlet third = (first * factor) + numbers(1)', '\tthird * third + Limit * 2']);
+		assert.deepStrictEqual(inlined(4), ['Inline first', '\tsecond = numbers(0) * factor',
+			'\tthird = second + numbers(1)', '\tthird * third + Limit * 2']);
+		assert.deepStrictEqual(inlined(5), ['Inline second', '\tfirst = numbers(0)',
+			'\tthird = (first * factor) + numbers(1)', '\tthird * third + Limit * 2']);
 		assert.strictEqual(inlined(6), undefined);
 		assert.strictEqual(inlined(7), undefined);
-		const loops = ['has numbers', 'Count Number', '\tLoops((1)).Count is 1', '\tfor numbers', '\t\tlet doubled = value * 2',
+		const loops = ['has numbers', 'Count Number', '\tLoops((1)).Count is 1', '\tfor numbers', '\t\tdoubled = value * 2',
 			'\t\tfor 2', '\t\t\tdoubled', '\t1'];
 		const own = parseType('C:/Code/Loops.strict', loops.join('\n'));
 		assert.strictEqual(inlineLet(loops, 4, scopeAt([own, list, number, text, vector], own, loops, 4)), undefined);

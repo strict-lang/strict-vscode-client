@@ -27,6 +27,8 @@ SCrunch restores successful test results from valid `.strictbinary` source/data 
 
 - Syntax and semantic highlighting, snippets, completion, hover, signature help, outline and workspace symbols.
   Completion follows types through members, parameters, locals, loops and method returns; matching return types rank first.
+  A local that does not change is a plain assignment (`total = input + 5`). `logger` is the console logger in every method;
+  a different logger is a `from` parameter.
 - Go to Definition (**F12**), Type Definition, Implementation (**Ctrl+F12**), References (**Shift+F12**),
   Rename (**F2**) and Call Hierarchy (**Shift+Alt+H**). Renaming a type also renames its file.
 - Inlay hints show local types and parameter names for literal arguments. Method tests appear in hover and completion.

@@ -2,7 +2,7 @@ import * as path from 'path';
 import { notFoundPattern } from './fixes';
 import { discoverStrictTests, typeNameFromPath } from './scrunchDiscover';
 import {
-	chainBefore, closingBracket, keywords, resolve, Scope, splitArguments, StrictType, typeNamed, valueType
+	chainBefore, closingBracket, introducedLocal, keywords, resolve, Scope, splitArguments, StrictType, typeNamed, valueType
 } from './strictIndex';
 
 /** Replaces line:character to endLine:endCharacter (the same position when left out) of file (the edited one when left out). */
@@ -14,7 +14,7 @@ const textLiteral = /"(?:[^"\\]|\\.)*"/g;
 const ordinals = ['first', 'second', 'third', 'fourth'];
 
 // Text checks can accept partial expressions. Extracted names come from the type or default to extracted.
-/** `let name = expression` above the line of the selected expression in a method body (a constant when it only uses literals,
+/** `name = expression` above the line of the selected expression in a method body (a constant when it only uses literals,
  * constants and types), the selection becomes name. */
 export function extractToLet(lines: string[], line: number, start: number, end: number, scope: Scope): Refactoring | undefined {
 	const text = lines[line];
@@ -27,22 +27,24 @@ export function extractToLet(lines: string[], line: number, start: number, end: 
 		/[\w.]/.test(text[from - 1] ?? '') || /[\w(]/.test(text[to] ?? '') || text.slice(0, from).split('"').length % 2 === 0) {
 		return undefined;
 	}
-	const keyword = isConstant(expression, scope, lines.slice(method.line + 1, line)) ? 'constant' : 'let';
+	const keyword = isConstant(expression, scope, lines.slice(method.line + 1, line)) ? 'constant' : '';
 	const taken = [...scope.own.members.map((member) => member.name), ...method.parameters.map((parameter) => parameter.name),
-		...scope.locals.keys(), 'value', 'index', ...keywords];
+		...scope.locals.keys(), 'value', 'index', 'logger', ...keywords];
 	const name = [lowered(typeOf(expression, scope)), 'extracted', 'extracted2', 'extracted3'].find((candidate) =>
 		candidate && !taken.includes(candidate));
 	if (!name) {
 		return undefined;
 	}
-	return { title: `Extract to ${keyword} ${name}`, kind: 'RefactorExtract', edits: [
-		{ line, character: 0, text: `${/^\s*/.exec(text)![0]}${keyword} ${name} = ${expression}\n` },
+	const introduced = keyword ? `${keyword} ${name}` : name;
+	return { title: `Extract to ${keyword || 'let'} ${name}`, kind: 'RefactorExtract', edits: [
+		{ line, character: 0, text: `${/^\s*/.exec(text)![0]}${introduced} = ${expression}\n` },
 		{ line, character: from, endCharacter: to, text: name }] };
 }
 
 function isExpression(text: string): boolean {
 	return /^-?[\w"(]/.test(text) && /[\w")]$/.test(text) && !text.includes(' = ') &&
-		!/^(let|constant|mutable|if|else|for|return)\b/.test(text) && closingBracket(`(${text})`) === text.length + 1;
+		!/^(constant|mutable|if|else|for|return)\b/.test(text) && !/^\w+ = /.test(text) &&
+		closingBracket(`(${text})`) === text.length + 1;
 }
 
 /** Whether expression only uses literals, constants, types and what is called on them, like `Limit * 2` or `Vector2(1, 2).X`. */
@@ -55,13 +57,15 @@ function isConstant(expression: string, scope: Scope, before: string[]): boolean
 	});
 }
 
-/** Replaces the only later use of the let declared on line with its value (bracketed inside other expressions) and removes the
- * declaration. */
+/** Replaces the only later use of the let or constant declared on line with its value (bracketed inside other expressions)
+ * and removes the declaration. */
 export function inlineLet(lines: string[], line: number, scope: Scope): Refactoring | undefined {
-	const [, name, value] = /^\t+(?:let|constant) (\w+) = (.+)$/.exec(lines[line]) ?? [];
-	if (!name || !scope.method) {
+	const declared = introducedLocal(lines[line] ?? '', scope);
+	if (!declared || declared.keyword === 'mutable' || declared.keyword === 'for' || !scope.method) {
 		return undefined;
 	}
+	const { name } = declared;
+	const value = declared.expression;
 	const use = new RegExp(`(?<![\\w.])${name}(?!\\w)`, 'g');
 	const uses = lines.slice(line + 1, scope.method.endLine + 1).flatMap((text, offset) => [...text.replace(textLiteral,
 		(literal) => ' '.repeat(literal.length)).matchAll(use)].map((found) => ({ line: line + 1 + offset, text, at: found.index! })));
