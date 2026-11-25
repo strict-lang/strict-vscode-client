@@ -273,7 +273,7 @@ suite('native compiler', () => {
 		assert.strictEqual(crashText({ exitCode: 0, durationMs: 9, output: 'All tests passed in A.strict' }), undefined);
 		assert.strictEqual(crashText({ exitCode: 1, durationMs: 9, output: 'Error: ResultMustBeUsed: a.Stop in Queue.strict:line 66, ' +
 			'use the value\n\tat ErrorScope.Used in Bytecode/ErrorScope.strict:line 71\n\t... (skipped 12 lines)\n' +
-			'\tat Strict.Ran in Strict.strict:line 82\n' }), 'Error: ResultMustBeUsed: a.Stop in Queue.strict:line 66, use the value');
+			'\tat Strict.Ran in Cli/Strict.strict:line 82\n' }), 'Error: ResultMustBeUsed: a.Stop in Queue.strict:line 66, use the value');
 	});
 
 	test('crashLocation is the file and zero based line of the error Strict reports, also in another file', () => {
